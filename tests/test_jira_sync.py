@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
-from et.config import WorkspaceConfigEntry
-from et.jira import JiraIssue
+from unittest.mock import patch
+
+import pytest
+
+from et.config import ConfigError, EtConfig, JiraConfig, WorkspaceConfigEntry
+from et.jira import JiraError, JiraIssue
 from et.jira_sync import (
+    JiraSyncError,
+    JiraSyncResult,
     apply_timer_changes,
     jira_key_from_ref,
     plan_reshuffle,
+    sync_jira_workspaces,
     truncate_summary,
 )
+from et.tracker import TrackerError
+from et.workspaces import WorkspaceError
 
 
 def ws(name="ET-1", type="dynamic", ref=None, description=None):
@@ -209,3 +218,205 @@ def test_apply_timer_changes_handles_swapped_slots_without_aliasing_bug():
     assert by_elapsed[111]["workspaceId"] == 1  # PROJ-2 was in slot 0, now slot 1
     assert by_elapsed[111]["running"] is False
     assert by_elapsed[222]["running"] is True
+
+
+def _jira_config(**overrides):
+    defaults = dict(
+        base_url="https://example.atlassian.net/",
+        email="me@example.com",
+        pat="secret-token",
+        jql="assignee = currentUser()",
+    )
+    defaults.update(overrides)
+    return JiraConfig(**defaults)
+
+
+@patch("et.jira_sync.workspaces.rename_all_workspaces")
+@patch("et.jira_sync.workspaces.configure_static_workspace_count")
+@patch("et.jira_sync.tracker.save_timers_with_reload")
+@patch("et.jira_sync.tracker.load_timers", return_value=[])
+@patch("et.jira_sync.save_config")
+@patch("et.jira_sync.fetch_active_issues")
+@patch("et.jira_sync.load_config")
+def test_sync_assigns_brand_new_issue_to_first_slot(
+    mock_load_config,
+    mock_fetch,
+    mock_save_config,
+    mock_load_timers,
+    mock_save_timers,
+    mock_configure,
+    mock_rename,
+):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=10, jira=_jira_config(), workspaces=[ws()]
+    )
+    mock_fetch.return_value = [issue("PROJ-1", "First task")]
+
+    result = sync_jira_workspaces()
+
+    assert result.assigned == [(0, "PROJ-1")]
+    assert result.deleted == []
+    mock_save_config.assert_called_once()
+    mock_rename.assert_called_once_with(["First task"])
+    mock_save_timers.assert_called_once()
+
+
+@patch("et.jira_sync.workspaces.rename_all_workspaces")
+@patch("et.jira_sync.workspaces.configure_static_workspace_count")
+@patch("et.jira_sync.tracker.save_timers_with_reload")
+@patch(
+    "et.jira_sync.tracker.load_timers",
+    return_value=[{"id": "a", "name": "ET-1", "workspaceId": 0, "timeElapsed": 555}],
+)
+@patch("et.jira_sync.save_config")
+@patch("et.jira_sync.fetch_active_issues")
+@patch("et.jira_sync.load_config")
+def test_sync_deletes_workspace_for_no_longer_active_issue_after_confirmation(
+    mock_load_config,
+    mock_fetch,
+    mock_save_config,
+    mock_load_timers,
+    mock_save_timers,
+    mock_configure,
+    mock_rename,
+    tmp_path,
+):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=10,
+        jira=_jira_config(),
+        workspaces=[ws(name="Old task", ref="jira:PROJ-OLD", description="Old task")],
+    )
+    mock_fetch.return_value = []
+
+    with patch("et.jira_sync.Path.home", return_value=tmp_path):
+        result = sync_jira_workspaces(confirm_delete=lambda slot, name, key: True)
+
+    assert result.deleted == [(0, "PROJ-OLD")]
+    dumped = tmp_path / "timers" / "by-id" / "jira-PROJ-OLD.txt"
+    assert dumped.read_text() == "555\n0h 9m 15s\n"
+
+
+@patch("et.jira_sync.workspaces.rename_all_workspaces")
+@patch("et.jira_sync.workspaces.configure_static_workspace_count")
+@patch("et.jira_sync.tracker.save_timers_with_reload")
+@patch("et.jira_sync.tracker.load_timers", return_value=[])
+@patch("et.jira_sync.save_config")
+@patch("et.jira_sync.fetch_active_issues")
+@patch("et.jira_sync.load_config")
+def test_sync_keeps_workspace_when_deletion_not_confirmed(
+    mock_load_config,
+    mock_fetch,
+    mock_save_config,
+    mock_load_timers,
+    mock_save_timers,
+    mock_configure,
+    mock_rename,
+):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=10,
+        jira=_jira_config(),
+        workspaces=[ws(name="Old task", ref="jira:PROJ-OLD", description="Old task")],
+    )
+    mock_fetch.return_value = []
+
+    result = sync_jira_workspaces(confirm_delete=lambda slot, name, key: False)
+
+    assert result.deleted == []
+    mock_rename.assert_called_once_with(["Old task"])
+
+
+@patch("et.jira_sync.fetch_active_issues")
+@patch("et.jira_sync.load_config")
+def test_sync_aborts_with_no_changes_when_plan_not_confirmed(mock_load_config, mock_fetch):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=10, jira=_jira_config(), workspaces=[ws()]
+    )
+    mock_fetch.return_value = [issue("PROJ-1")]
+
+    result = sync_jira_workspaces(confirm_plan=lambda issues: False)
+
+    assert result == JiraSyncResult(assigned=[], moved=[], kept=[], deleted=[], skipped=[])
+
+
+@patch("et.jira_sync.load_config")
+def test_sync_raises_jira_sync_error_when_no_jira_config(mock_load_config):
+    mock_load_config.return_value = EtConfig(max_workspaces=10, jira=None, workspaces=[ws()])
+
+    with pytest.raises(JiraSyncError, match="jira"):
+        sync_jira_workspaces()
+
+
+@patch("et.jira_sync.load_config")
+def test_sync_wraps_config_error(mock_load_config):
+    mock_load_config.side_effect = ConfigError("bad file")
+
+    with pytest.raises(ConfigError):
+        sync_jira_workspaces()
+
+
+@patch("et.jira_sync.fetch_active_issues", side_effect=JiraError("network down"))
+@patch("et.jira_sync.load_config")
+def test_sync_wraps_jira_error(mock_load_config, mock_fetch):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=10, jira=_jira_config(), workspaces=[ws()]
+    )
+
+    with pytest.raises(JiraSyncError, match="network down"):
+        sync_jira_workspaces()
+
+
+@patch("et.jira_sync.tracker.load_timers", side_effect=TrackerError("tracker broken"))
+@patch("et.jira_sync.fetch_active_issues", return_value=[])
+@patch("et.jira_sync.load_config")
+def test_sync_wraps_tracker_error(mock_load_config, mock_fetch, mock_load_timers):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=10, jira=_jira_config(), workspaces=[ws()]
+    )
+
+    with pytest.raises(JiraSyncError, match="tracker broken"):
+        sync_jira_workspaces()
+
+
+@patch(
+    "et.jira_sync.workspaces.configure_static_workspace_count",
+    side_effect=WorkspaceError("workspace broken"),
+)
+@patch("et.jira_sync.tracker.load_timers", return_value=[])
+@patch("et.jira_sync.fetch_active_issues", return_value=[])
+@patch("et.jira_sync.load_config")
+def test_sync_wraps_workspace_error(
+    mock_load_config, mock_fetch, mock_load_timers, mock_configure
+):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=10, jira=_jira_config(), workspaces=[ws()]
+    )
+
+    with pytest.raises(JiraSyncError, match="workspace broken"):
+        sync_jira_workspaces()
+
+
+@patch("et.jira_sync.workspaces.rename_all_workspaces")
+@patch("et.jira_sync.workspaces.configure_static_workspace_count")
+@patch("et.jira_sync.tracker.save_timers_with_reload")
+@patch("et.jira_sync.tracker.load_timers", return_value=[])
+@patch("et.jira_sync.save_config")
+@patch("et.jira_sync.fetch_active_issues")
+@patch("et.jira_sync.load_config")
+def test_sync_grows_workspace_list_up_to_max_workspaces(
+    mock_load_config,
+    mock_fetch,
+    mock_save_config,
+    mock_load_timers,
+    mock_save_timers,
+    mock_configure,
+    mock_rename,
+):
+    mock_load_config.return_value = EtConfig(
+        max_workspaces=3, jira=_jira_config(), workspaces=[ws()]
+    )
+    mock_fetch.return_value = [issue("PROJ-1"), issue("PROJ-2"), issue("PROJ-3")]
+
+    result = sync_jira_workspaces()
+
+    assert len(result.assigned) == 3
+    mock_configure.assert_called_once_with(3)

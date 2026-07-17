@@ -9,11 +9,20 @@ touches the filesystem, GNOME, or the Jira API.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
 
-from et.config import WorkspaceConfigEntry
-from et.jira import JiraIssue
-from et.tracker import TimerEntry, build_new_timer, find_timer_for_workspace
+from et import tracker, workspaces
+from et.config import ConfigError, EtConfig, WorkspaceConfigEntry, load_config, save_config
+from et.jira import JiraError, JiraIssue, fetch_active_issues
+from et.tracker import (
+    TimerEntry,
+    TrackerError,
+    build_new_timer,
+    find_timer_for_workspace,
+)
+from et.workspaces import WorkspaceError
 
 JIRA_REF_PREFIX = "jira:"
 TRUNCATED_NAME_LENGTH = 20
@@ -186,3 +195,126 @@ def apply_timer_changes(
             entries.append(build_new_timer(slot, f"ET-{slot + 1}"))
 
     return entries
+
+
+class JiraSyncError(RuntimeError):
+    """Raised when the Jira workspace sync cannot be completed."""
+
+
+@dataclass(frozen=True)
+class JiraSyncResult:
+    """Summary of what `sync_jira_workspaces` changed."""
+
+    assigned: list[tuple[int, str]]
+    moved: list[tuple[str, int, int]]
+    kept: list[tuple[int, str]]
+    deleted: list[tuple[int, str]]
+    skipped: list[str]
+
+
+def _default_entry(slot: int, workspace_type: str) -> WorkspaceConfigEntry:
+    return WorkspaceConfigEntry(name=f"ET-{slot + 1}", type=workspace_type)
+
+
+def _count_eligible(entries: list[WorkspaceConfigEntry]) -> int:
+    return sum(1 for entry in entries if entry.type != "static")
+
+
+def sync_jira_workspaces(
+    *,
+    confirm_plan: Callable[[list[JiraIssue]], bool] = lambda issues: True,
+    confirm_delete: Callable[[int, str, str], bool] = lambda slot, name, key: False,
+) -> JiraSyncResult:
+    """Fetch active Jira issues and reconcile them onto GNOME workspaces.
+
+    `confirm_plan(issues)` is called once with the fetched, priority-sorted
+    issue list; returning False aborts with no changes made (implements the
+    "proceed with this assignment?" prompt / its `--no-prompt` skip).
+
+    `confirm_delete(slot, workspace_name, jira_key)` is called once per
+    workspace whose tracked issue is no longer active; returning False
+    leaves that workspace untouched (implements the per-workspace deletion
+    prompt / its `--no-prompt` auto-confirm).
+
+    Raises `ConfigError` if the config file is missing/malformed,
+    `JiraSyncError` if there's no `jira` config block or the Jira API call
+    / GNOME workspace operations / Tracker timer operations fail.
+    """
+    config: EtConfig = load_config()
+    if config.jira is None:
+        raise JiraSyncError(
+            "no 'jira' block found in the config file "
+            "(add base_url/email/pat/jql under a top-level 'jira:' key)"
+        )
+
+    try:
+        issues = fetch_active_issues(config.jira)
+    except JiraError as exc:
+        raise JiraSyncError(str(exc)) from exc
+
+    if not confirm_plan(issues):
+        return JiraSyncResult(assigned=[], moved=[], kept=[], deleted=[], skipped=[])
+
+    workspaces_list = list(config.workspaces)
+    active_keys = {candidate.key for candidate in issues}
+
+    try:
+        all_timers = tracker.load_timers()
+    except TrackerError as exc:
+        raise JiraSyncError(str(exc)) from exc
+
+    deleted: list[tuple[int, str]] = []
+    timers_changed = False
+    for slot, entry in enumerate(workspaces_list):
+        key = jira_key_from_ref(entry.ref)
+        if key is None or entry.type == "static" or key in active_keys:
+            continue
+        if not confirm_delete(slot, entry.name, key):
+            continue
+
+        timer = find_timer_for_workspace(all_timers, slot)
+        if timer is not None:
+            out_path = Path.home() / "timers" / "by-id" / f"jira-{key}.txt"
+            tracker.dump_timer_to_file(timer, out_path)
+            timer["timeElapsed"] = 0
+            timer["running"] = False
+            timers_changed = True
+
+        workspaces_list[slot] = _default_entry(slot, entry.type)
+        deleted.append((slot, key))
+
+    while (
+        _count_eligible(workspaces_list) < len(issues)
+        and len(workspaces_list) < config.max_workspaces
+    ):
+        workspaces_list.append(_default_entry(len(workspaces_list), "dynamic"))
+
+    try:
+        workspaces.configure_static_workspace_count(
+            max(len(workspaces_list), config.max_workspaces)
+        )
+    except WorkspaceError as exc:
+        raise JiraSyncError(str(exc)) from exc
+
+    outcome = plan_reshuffle(workspaces_list, issues)
+    new_timers = apply_timer_changes(all_timers, outcome)
+
+    if timers_changed or outcome.assigned or outcome.moved:
+        try:
+            tracker.save_timers_with_reload(new_timers, "syncing Jira-assigned timers")
+        except TrackerError as exc:
+            raise JiraSyncError(str(exc)) from exc
+
+    try:
+        save_config(replace(config, workspaces=outcome.workspaces))
+        workspaces.rename_all_workspaces([entry.name for entry in outcome.workspaces])
+    except (ConfigError, WorkspaceError) as exc:
+        raise JiraSyncError(str(exc)) from exc
+
+    return JiraSyncResult(
+        assigned=outcome.assigned,
+        moved=outcome.moved,
+        kept=outcome.kept,
+        deleted=deleted,
+        skipped=outcome.skipped,
+    )
