@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typer
 
+from et.config import ConfigError, load_workspace_names
 from et.tracker import (
     TrackerError,
     add_tracker_for_current_workspace,
@@ -11,7 +12,7 @@ from et.tracker import (
     dump_all_trackers,
     reset_all_trackers,
 )
-from et.workspaces import WorkspaceError, rename_active_workspace
+from et.workspaces import WorkspaceError, rename_active_workspace, rename_all_workspaces
 
 app = typer.Typer(
     help="et: a small CLI for tracking effort and managing your workspace.",
@@ -25,8 +26,37 @@ app.add_typer(tracker_app, name="tracker")
 
 
 @ws_app.command("rename")
-def rename(new_name: str) -> None:
-    """Rename the current (active) workspace to NEW_NAME."""
+def rename(
+    new_name: str = typer.Argument(
+        None, help="New name for the active workspace (omit when using --all)."
+    ),
+    all_workspaces: bool = typer.Option(
+        False,
+        "--all",
+        help="Rename all workspaces using the 'workspaces' list from ~/.config/et/config.yaml.",
+    ),
+) -> None:
+    """Rename the current (active) workspace to NEW_NAME, or all workspaces with --all."""
+    if all_workspaces:
+        if new_name is not None:
+            typer.echo("Error: NEW_NAME must not be given together with --all", err=True)
+            raise typer.Exit(code=1)
+
+        try:
+            names = load_workspace_names()
+            indices = rename_all_workspaces(names)
+        except (ConfigError, WorkspaceError) as error:
+            typer.echo(f"Error: {error}", err=True)
+            raise typer.Exit(code=1) from error
+
+        for index, name in zip(indices, names, strict=True):
+            typer.echo(f"Renamed workspace {index + 1} to '{name}'")
+        return
+
+    if new_name is None:
+        typer.echo("Error: NEW_NAME is required unless --all is given", err=True)
+        raise typer.Exit(code=1)
+
     try:
         index = rename_active_workspace(new_name)
     except WorkspaceError as error:

@@ -97,3 +97,21 @@ def rename_active_workspace(new_name: str) -> int:
     names[index] = new_name
     set_workspace_names(names)
     return index
+
+
+def rename_all_workspaces(new_names: list[str]) -> list[int]:
+    """Rename workspaces 0..len(new_names)-1 to `new_names`, in order.
+
+    Any existing workspace at an index >= len(new_names) is left untouched.
+    Returns the list of 0-based workspace indices that were renamed.
+    """
+    names = get_workspace_names()
+
+    if len(names) < len(new_names):
+        names = names + [""] * (len(new_names) - len(names))
+
+    for index, name in enumerate(new_names):
+        names[index] = name
+
+    set_workspace_names(names)
+    return list(range(len(new_names)))

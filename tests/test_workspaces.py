@@ -14,6 +14,7 @@ from et.workspaces import (
     get_active_workspace_index,
     get_workspace_names,
     rename_active_workspace,
+    rename_all_workspaces,
     set_workspace_names,
 )
 
@@ -118,3 +119,27 @@ def test_configure_static_workspace_count_disables_dynamic_and_sets_count(
 def test_configure_static_workspace_count_wraps_gsettings_error(mock_set_boolean, mock_set_int):
     with pytest.raises(WorkspaceError, match="boom"):
         configure_static_workspace_count(10)
+
+
+@patch("et.workspaces.set_workspace_names")
+@patch("et.workspaces.get_workspace_names", return_value=["old-a", "old-b", "old-c"])
+def test_rename_all_workspaces_replaces_leading_names(mock_get_names, mock_set_names):
+    indices = rename_all_workspaces(["mails", "handson"])
+    assert indices == [0, 1]
+    mock_set_names.assert_called_once_with(["mails", "handson", "old-c"])
+
+
+@patch("et.workspaces.set_workspace_names")
+@patch("et.workspaces.get_workspace_names", return_value=["old-a"])
+def test_rename_all_workspaces_pads_when_config_has_more_entries(mock_get_names, mock_set_names):
+    indices = rename_all_workspaces(["mails", "handson", "isd-321"])
+    assert indices == [0, 1, 2]
+    mock_set_names.assert_called_once_with(["mails", "handson", "isd-321"])
+
+
+@patch("et.workspaces.set_workspace_names")
+@patch("et.workspaces.get_workspace_names", return_value=[])
+def test_rename_all_workspaces_with_empty_list_is_noop_write(mock_get_names, mock_set_names):
+    indices = rename_all_workspaces([])
+    assert indices == []
+    mock_set_names.assert_called_once_with([])

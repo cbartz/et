@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "pyyaml>=6.0.3",
     "typer>=0.12",
 ]
 
@@ -24,6 +25,7 @@ dev = [
     "mypy>=1.11",
     "pytest>=8.0",
     "prek>=0.3",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [tool.ruff]
