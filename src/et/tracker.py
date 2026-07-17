@@ -26,13 +26,13 @@ from datetime import date
 from pathlib import Path
 
 from et import gsettings, workspaces
+from et.config import DEFAULT_MAX_WORKSPACES
 from et.gnome_extensions import GnomeExtensionsError, reload_around
 from et.gsettings import GSettingsError
 
 TRACKER_SCHEMA = "org.gnome.shell.extensions.tracker"
 TRACKER_TIMERS_KEY = "timers"
 TRACKER_EXTENSION_UUID = "tracker@aliakseiz.github.com"
-DEFAULT_WORKSPACE_COUNT = 10
 
 # Matches only the timers this tool creates/manages ("ET-1", "ET-2", ...),
 # so bulk operations never touch timers a user created manually in Tracker's UI.
@@ -179,7 +179,7 @@ def add_tracker_for_current_workspace() -> tuple[int, str, bool]:
 
 
 def add_trackers_for_all_workspaces(
-    count: int = DEFAULT_WORKSPACE_COUNT,
+    count: int = DEFAULT_MAX_WORKSPACES,
 ) -> list[tuple[int, str, bool]]:
     """Ensure GNOME has `count` static workspaces, each with a Tracker timer.
 
@@ -228,6 +228,26 @@ def reset_all_trackers() -> list[str]:
     return reset_names
 
 
+def reset_tracker_for_current_workspace() -> tuple[int, str | None]:
+    """Zero and stop the ET-<n> timer bound to the active workspace.
+
+    Returns (workspace_index, timer_name), where `timer_name` is None if no
+    ET-<n> timer is bound to the active workspace (in which case nothing is
+    written).
+    """
+    index = workspaces.get_active_workspace_index()
+    entries = load_timers()
+    timer = find_timer_for_workspace(entries, index)
+    name = timer.get("name") if timer is not None else None
+    if timer is None or not isinstance(name, str) or not _ET_TIMER_NAME_RE.match(name):
+        return index, None
+
+    timer["timeElapsed"] = 0
+    timer["running"] = False
+    save_timers_with_reload(entries, "resetting timer")
+    return index, name
+
+
 def format_duration(seconds: float) -> str:
     """Format a number of seconds as e.g. "2h 15m 30s"."""
     total_seconds = int(seconds)
@@ -271,3 +291,23 @@ def dump_all_trackers(base_dir: Path | None = None) -> list[Path]:
         written.append(path)
 
     return written
+
+
+def dump_tracker_for_current_workspace(base_dir: Path | None = None) -> tuple[int, Path | None]:
+    """Write the active workspace's ET-<n> timer elapsed time to a file.
+
+    The file is written to `<base_dir>/<yyyy-mm-dd>/ET-<n>.txt` (`base_dir`
+    defaults to `~/timers`). Returns (workspace_index, path), where `path` is
+    None if no ET-<n> timer is bound to the active workspace.
+    """
+    index = workspaces.get_active_workspace_index()
+    entries = load_timers()
+    timer = find_timer_for_workspace(entries, index)
+    name = timer.get("name") if timer is not None else None
+    if timer is None or not isinstance(name, str) or not _ET_TIMER_NAME_RE.match(name):
+        return index, None
+
+    root = base_dir if base_dir is not None else Path.home() / "timers"
+    path = root / date.today().isoformat() / f"{name}.txt"
+    dump_timer_to_file(timer, path)
+    return index, path

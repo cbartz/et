@@ -18,8 +18,10 @@ from et.tracker import (
     build_new_timer,
     dump_all_trackers,
     dump_timer_to_file,
+    dump_tracker_for_current_workspace,
     find_timer_for_workspace,
     reset_all_trackers,
+    reset_tracker_for_current_workspace,
 )
 
 SETTINGS_SENTINEL = {"id": "settings", "totalTimeSelected": True}
@@ -238,6 +240,73 @@ def test_dump_all_writes_one_file_per_et_timer(mock_read, tmp_path):
 @patch("et.tracker.gsettings.read_string_array", return_value=[json.dumps(SETTINGS_SENTINEL)])
 def test_dump_all_is_noop_when_no_et_timers_exist(mock_read, tmp_path):
     assert dump_all_trackers(base_dir=tmp_path) == []
+    assert not (tmp_path / date.today().isoformat()).exists()
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps(SETTINGS_SENTINEL),
+        json.dumps(
+            {"id": "a", "name": "ET-1", "workspaceId": 0, "timeElapsed": 125, "running": True}
+        ),
+        json.dumps({"id": "b", "name": "ET-2", "workspaceId": 1, "timeElapsed": 999}),
+    ],
+)
+@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
+def test_reset_current_workspace_resets_only_its_timer(
+    mock_index, mock_read, mock_write, mock_reload
+):
+    index, name = reset_tracker_for_current_workspace()
+
+    assert (index, name) == (0, "ET-1")
+    written = [json.loads(raw) for raw in mock_write.call_args[0][2]]
+    reset_entry = next(e for e in written if e.get("name") == "ET-1")
+    other_entry = next(e for e in written if e.get("name") == "ET-2")
+    assert reset_entry["timeElapsed"] == 0
+    assert reset_entry["running"] is False
+    assert other_entry["timeElapsed"] == 999
+
+
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[json.dumps({"id": "b", "name": "Manual", "workspaceId": 0})],
+)
+@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
+def test_reset_current_workspace_is_noop_without_et_timer(mock_index, mock_read, mock_write):
+    index, name = reset_tracker_for_current_workspace()
+
+    assert (index, name) == (0, None)
+    mock_write.assert_not_called()
+
+
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps(SETTINGS_SENTINEL),
+        json.dumps({"id": "a", "name": "ET-2", "workspaceId": 1, "timeElapsed": 3725}),
+    ],
+)
+@patch("et.tracker.workspaces.get_active_workspace_index", return_value=1)
+def test_dump_current_workspace_writes_its_timer(mock_index, mock_read, tmp_path):
+    index, path = dump_tracker_for_current_workspace(base_dir=tmp_path)
+
+    assert index == 1
+    assert path is not None
+    assert path.name == "ET-2.txt"
+    assert path.parent.name == date.today().isoformat()
+    assert path.read_text() == "3725\n1h 2m 5s\n"
+
+
+@patch("et.tracker.gsettings.read_string_array", return_value=[json.dumps(SETTINGS_SENTINEL)])
+@patch("et.tracker.workspaces.get_active_workspace_index", return_value=3)
+def test_dump_current_workspace_is_noop_without_et_timer(mock_index, mock_read, tmp_path):
+    index, path = dump_tracker_for_current_workspace(base_dir=tmp_path)
+
+    assert (index, path) == (3, None)
     assert not (tmp_path / date.today().isoformat()).exists()
 
 

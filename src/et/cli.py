@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,7 +15,9 @@ from et.tracker import (
     add_tracker_for_current_workspace,
     add_trackers_for_all_workspaces,
     dump_all_trackers,
+    dump_tracker_for_current_workspace,
     reset_all_trackers,
+    reset_tracker_for_current_workspace,
 )
 from et.workspaces import (
     WorkspaceError,
@@ -51,9 +54,15 @@ jira_app = typer.Typer(help="Sync GNOME workspaces with active Jira issues.", no
 app.add_typer(jira_app, name="jira")
 
 
+@app.callback()
+def _configure_logging() -> None:
+    """Send library warnings (e.g. from et.jira) to stderr."""
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+
 @ws_app.command("rename")
 def rename(
-    new_name: str = typer.Argument(
+    new_name: str | None = typer.Argument(
         None, help="New name for the active workspace (omit when using --all)."
     ),
     all_workspaces: bool = typer.Option(
@@ -164,10 +173,22 @@ def tracker_reset(
         help="Reset every ET-<n> tracker's elapsed time to 0 and stop it.",
     ),
 ) -> None:
-    """Reset ET-<n> trackers to 0 elapsed time."""
+    """Reset ET-<n> trackers to 0 elapsed time.
+
+    Without --all, resets only the ET-<n> timer bound to the active workspace.
+    """
     if not all_workspaces:
-        typer.echo("Error: --all is required (only bulk reset is currently supported)", err=True)
-        raise typer.Exit(code=1)
+        try:
+            index, name = reset_tracker_for_current_workspace()
+        except (WorkspaceError, TrackerError) as error:
+            typer.echo(f"Error: {error}", err=True)
+            raise typer.Exit(code=1) from error
+
+        if name is None:
+            typer.echo(f"No ET-<n> tracker bound to workspace {index + 1} to reset")
+        else:
+            typer.echo(f"Reset tracker '{name}' to 0")
+        return
 
     try:
         reset_names = reset_all_trackers()
@@ -191,10 +212,22 @@ def tracker_dump(
         help="Dump every ET-<n> tracker's elapsed time to ~/timers/<yyyy-mm-dd>/.",
     ),
 ) -> None:
-    """Save each ET-<n> tracker's elapsed time to a file under ~/timers/<yyyy-mm-dd>/."""
+    """Save each ET-<n> tracker's elapsed time to a file under ~/timers/<yyyy-mm-dd>/.
+
+    Without --all, dumps only the ET-<n> timer bound to the active workspace.
+    """
     if not all_workspaces:
-        typer.echo("Error: --all is required (only bulk dump is currently supported)", err=True)
-        raise typer.Exit(code=1)
+        try:
+            index, path = dump_tracker_for_current_workspace()
+        except (WorkspaceError, TrackerError) as error:
+            typer.echo(f"Error: {error}", err=True)
+            raise typer.Exit(code=1) from error
+
+        if path is None:
+            typer.echo(f"No ET-<n> tracker bound to workspace {index + 1} to dump")
+        else:
+            typer.echo(f"Wrote {path}")
+        return
 
     try:
         written = dump_all_trackers()
@@ -265,10 +298,14 @@ def jira_get(
         typer.echo(f"Assigned workspace {slot + 1} to jira:{key}")
     for key, old_slot, new_slot in result.moved:
         typer.echo(f"Moved jira:{key} from workspace {old_slot + 1} to {new_slot + 1}")
+    for slot, key in result.kept:
+        typer.echo(f"Kept workspace {slot + 1} on jira:{key}")
     for slot, key in result.deleted:
         typer.echo(f"Deleted workspace {slot + 1} (jira:{key} no longer active)")
     for key in result.skipped:
         typer.echo(f"Skipped jira:{key} (no free workspace slots)", err=True)
 
-    if not (result.assigned or result.moved or result.deleted or result.skipped):
+    if not (
+        result.assigned or result.moved or result.kept or result.deleted or result.skipped
+    ):
         typer.echo("Nothing to do — workspaces already match your active issues.")

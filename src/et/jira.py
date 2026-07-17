@@ -11,7 +11,7 @@ can be unit tested by mocking `requests.get`.
 
 from __future__ import annotations
 
-import sys
+import logging
 from dataclasses import dataclass
 
 import requests
@@ -19,6 +19,8 @@ import requests
 from et.config import JiraConfig
 
 SEARCH_PATH = "rest/api/3/search/jql"
+
+logger = logging.getLogger(__name__)
 
 
 class JiraError(RuntimeError):
@@ -93,11 +95,15 @@ def fetch_active_issues(jira_config: JiraConfig) -> list[JiraIssue]:
     for raw_issue in issues_raw:
         if not isinstance(raw_issue, dict):
             continue
+        key = raw_issue.get("key")
+        if not isinstance(key, str) or not key:
+            logger.warning("skipping Jira issue with missing or invalid 'key': %r", raw_issue)
+            continue
         fields = raw_issue.get("fields", {})
         priority_field = fields.get("priority") or {}
         issues.append(
             JiraIssue(
-                key=raw_issue["key"],
+                key=key,
                 summary=fields.get("summary") or "",
                 priority=priority_field.get("name") or "",
             )
@@ -108,10 +114,10 @@ def fetch_active_issues(jira_config: JiraConfig) -> list[JiraIssue]:
 
     for issue in issues:
         if issue.priority not in rank:
-            print(
-                f"Warning: issue {issue.key} has unknown priority "
-                f"'{issue.priority}', treating it as lowest priority",
-                file=sys.stderr,
+            logger.warning(
+                "issue %s has unknown priority '%s', treating it as lowest priority",
+                issue.key,
+                issue.priority,
             )
 
     indexed = list(enumerate(issues))

@@ -15,4 +15,7 @@ test:
     uv run pytest
 
 test-integ:
-    echo "no integration tests yet"
+    uv run pytest tests/integration --no-cov
+
+ops:
+    uv build

@@ -175,3 +175,61 @@ def test_ws_info_reports_error_when_active_workspace_lookup_fails(mock_load_conf
 
     assert result.exit_code == 1
     assert "Error: wmctrl not found" in result.output
+
+
+@patch("et.cli.reset_tracker_for_current_workspace", return_value=(0, "ET-1"))
+def test_tracker_reset_current_workspace_reports_reset_timer(mock_reset):
+    result = runner.invoke(app, ["tracker", "reset"])
+
+    assert result.exit_code == 0
+    assert "Reset tracker 'ET-1' to 0" in result.stdout
+
+
+@patch("et.cli.reset_tracker_for_current_workspace", return_value=(2, None))
+def test_tracker_reset_current_workspace_reports_when_no_timer_bound(mock_reset):
+    result = runner.invoke(app, ["tracker", "reset"])
+
+    assert result.exit_code == 0
+    assert "No ET-<n> tracker bound to workspace 3 to reset" in result.stdout
+
+
+@patch("et.cli.reset_all_trackers", return_value=["ET-1", "ET-2"])
+def test_tracker_reset_all_reports_each_reset_timer(mock_reset):
+    result = runner.invoke(app, ["tracker", "reset", "--all"])
+
+    assert result.exit_code == 0
+    assert "Reset tracker 'ET-1' to 0" in result.stdout
+    assert "Reset tracker 'ET-2' to 0" in result.stdout
+
+
+@patch("et.cli.dump_tracker_for_current_workspace")
+def test_tracker_dump_current_workspace_reports_written_path(mock_dump, tmp_path):
+    path = tmp_path / "ET-1.txt"
+    mock_dump.return_value = (0, path)
+
+    result = runner.invoke(app, ["tracker", "dump"])
+
+    assert result.exit_code == 0
+    assert f"Wrote {path}" in result.stdout
+
+
+@patch("et.cli.dump_tracker_for_current_workspace", return_value=(4, None))
+def test_tracker_dump_current_workspace_reports_when_no_timer_bound(mock_dump):
+    result = runner.invoke(app, ["tracker", "dump"])
+
+    assert result.exit_code == 0
+    assert "No ET-<n> tracker bound to workspace 5 to dump" in result.stdout
+
+
+@patch("et.cli.load_config")
+@patch("et.cli.sync_jira_workspaces")
+def test_jira_get_reports_kept_workspaces(mock_sync, mock_load_config):
+    mock_load_config.return_value = _config()
+    mock_sync.return_value = JiraSyncResult(
+        assigned=[], moved=[], kept=[(1, "PROJ-9")], deleted=[], skipped=[]
+    )
+
+    result = runner.invoke(app, ["jira", "get"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Kept workspace 2 on jira:PROJ-9" in result.stdout

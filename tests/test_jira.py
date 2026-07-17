@@ -66,7 +66,7 @@ def test_fetch_active_issues_passes_jql_and_basic_auth(mock_get):
 
 
 @patch("et.jira.requests.get")
-def test_fetch_active_issues_unknown_priority_sorts_last_and_warns(mock_get, capsys):
+def test_fetch_active_issues_unknown_priority_sorts_last_and_warns(mock_get, caplog):
     mock_get.return_value = _response(
         [
             _issue("PROJ-1", "Custom priority task", "Blocker"),
@@ -74,10 +74,27 @@ def test_fetch_active_issues_unknown_priority_sorts_last_and_warns(mock_get, cap
         ]
     )
 
-    issues = fetch_active_issues(_config())
+    with caplog.at_level("WARNING", logger="et.jira"):
+        issues = fetch_active_issues(_config())
 
     assert [issue.key for issue in issues] == ["PROJ-2", "PROJ-1"]
-    assert "PROJ-1" in capsys.readouterr().err
+    assert "PROJ-1" in caplog.text
+
+
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_skips_issue_without_key(mock_get, caplog):
+    mock_get.return_value = _response(
+        [
+            {"fields": {"summary": "no key", "priority": {"name": "High"}}},
+            _issue("PROJ-2", "Has key", "Low"),
+        ]
+    )
+
+    with caplog.at_level("WARNING", logger="et.jira"):
+        issues = fetch_active_issues(_config())
+
+    assert [issue.key for issue in issues] == ["PROJ-2"]
+    assert "missing or invalid 'key'" in caplog.text
 
 
 @patch("et.jira.requests.get")
