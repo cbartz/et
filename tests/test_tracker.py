@@ -17,6 +17,7 @@ from et.tracker import (
     add_trackers_for_all_workspaces,
     build_new_timer,
     dump_all_trackers,
+    dump_timer_to_file,
     find_timer_for_workspace,
     reset_all_trackers,
 )
@@ -238,3 +239,21 @@ def test_dump_all_writes_one_file_per_et_timer(mock_read, tmp_path):
 def test_dump_all_is_noop_when_no_et_timers_exist(mock_read, tmp_path):
     assert dump_all_trackers(base_dir=tmp_path) == []
     assert not (tmp_path / date.today().isoformat()).exists()
+
+
+def test_dump_timer_to_file_writes_seconds_and_duration(tmp_path):
+    entry = {"id": "a", "name": "ET-1", "timeElapsed": 3725}
+    path = tmp_path / "nested" / "ET-1.txt"
+
+    dump_timer_to_file(entry, path)
+
+    assert path.read_text() == "3725\n1h 2m 5s\n"
+
+
+def test_dump_timer_to_file_treats_missing_elapsed_as_zero(tmp_path):
+    entry = {"id": "a", "name": "ET-1"}
+    path = tmp_path / "ET-1.txt"
+
+    dump_timer_to_file(entry, path)
+
+    assert path.read_text() == "0\n0h 0m 0s\n"

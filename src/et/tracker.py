@@ -70,7 +70,7 @@ def _find_extension_schema_dir() -> str | None:
     return None
 
 
-def _load_timers() -> list[TimerEntry]:
+def load_timers() -> list[TimerEntry]:
     """Return the raw list of Tracker entries (timers and the settings sentinel)."""
     try:
         raw_entries = gsettings.read_string_array(
@@ -92,7 +92,7 @@ def _load_timers() -> list[TimerEntry]:
     return entries
 
 
-def _save_timers(entries: list[TimerEntry]) -> None:
+def save_timers(entries: list[TimerEntry]) -> None:
     """Write the given list of Tracker entries back to GSettings."""
     raw_entries = [json.dumps(entry) for entry in entries]
     try:
@@ -149,11 +149,11 @@ def _ensure_timer_for_workspace(entries: list[TimerEntry], index: int) -> tuple[
     return name, True
 
 
-def _save_with_reload(entries: list[TimerEntry], action: str) -> None:
+def save_timers_with_reload(entries: list[TimerEntry], action: str) -> None:
     """Save `entries` via the disable/write/enable reload dance, wrapping errors."""
     try:
         with reload_around(TRACKER_EXTENSION_UUID):
-            _save_timers(entries)
+            save_timers(entries)
     except GnomeExtensionsError as exc:
         raise TrackerError(
             f"could not reload the Tracker extension after {action} "
@@ -169,12 +169,12 @@ def add_tracker_for_current_workspace() -> tuple[int, str, bool]:
     which case no write happens and `timer_name` is the existing timer's name).
     """
     index = workspaces.get_active_workspace_index()
-    entries = _load_timers()
+    entries = load_timers()
     name, created = _ensure_timer_for_workspace(entries, index)
     if not created:
         return index, name, False
 
-    _save_with_reload(entries, "writing the new timer")
+    save_timers_with_reload(entries, "writing the new timer")
     return index, name, True
 
 
@@ -190,7 +190,7 @@ def add_trackers_for_all_workspaces(
     """
     workspaces.configure_static_workspace_count(count)
 
-    entries = _load_timers()
+    entries = load_timers()
     results: list[tuple[int, str, bool]] = []
     any_created = False
     for index in range(count):
@@ -199,7 +199,7 @@ def add_trackers_for_all_workspaces(
         any_created = any_created or created
 
     if any_created:
-        _save_with_reload(entries, "writing the new timers")
+        save_timers_with_reload(entries, "writing the new timers")
 
     return results
 
@@ -211,7 +211,7 @@ def reset_all_trackers() -> list[str]:
     timers are left untouched. Returns the names of the timers that were
     reset (empty if there were none).
     """
-    entries = _load_timers()
+    entries = load_timers()
     reset_names: list[str] = []
     for entry in entries:
         name = entry.get("name")
@@ -224,16 +224,28 @@ def reset_all_trackers() -> list[str]:
     if not reset_names:
         return []
 
-    _save_with_reload(entries, "resetting timers")
+    save_timers_with_reload(entries, "resetting timers")
     return reset_names
 
 
-def _format_duration(seconds: float) -> str:
+def format_duration(seconds: float) -> str:
     """Format a number of seconds as e.g. "2h 15m 30s"."""
     total_seconds = int(seconds)
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours}h {minutes}m {secs}s"
+
+
+def dump_timer_to_file(entry: TimerEntry, path: Path) -> None:
+    """Write `entry`'s elapsed time to `path` (creating its parent directory).
+
+    The file contains two lines: the raw elapsed seconds, then a
+    human-readable duration (e.g. "2h 15m 30s").
+    """
+    elapsed = entry.get("timeElapsed", 0)
+    seconds = elapsed if isinstance(elapsed, (int, float)) else 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{int(seconds)}\n{format_duration(seconds)}\n")
 
 
 def dump_all_trackers(base_dir: Path | None = None) -> list[Path]:
@@ -244,7 +256,7 @@ def dump_all_trackers(base_dir: Path | None = None) -> list[Path]:
     seconds, then a human-readable duration (e.g. "2h 15m 30s"). Returns the
     list of file paths written, in the order timers were found.
     """
-    entries = _load_timers()
+    entries = load_timers()
     root = base_dir if base_dir is not None else Path.home() / "timers"
     out_dir = root / date.today().isoformat()
 
@@ -254,12 +266,8 @@ def dump_all_trackers(base_dir: Path | None = None) -> list[Path]:
         if not isinstance(name, str) or not _ET_TIMER_NAME_RE.match(name):
             continue
 
-        elapsed = entry.get("timeElapsed", 0)
-        seconds = elapsed if isinstance(elapsed, (int, float)) else 0
-
-        out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{name}.txt"
-        path.write_text(f"{int(seconds)}\n{_format_duration(seconds)}\n")
+        dump_timer_to_file(entry, path)
         written.append(path)
 
     return written
