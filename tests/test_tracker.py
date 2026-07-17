@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
+from datetime import date
 from unittest.mock import patch
 
 import pytest
@@ -13,8 +14,11 @@ from et.gsettings import GSettingsError
 from et.tracker import (
     TrackerError,
     add_tracker_for_current_workspace,
+    add_trackers_for_all_workspaces,
     build_new_timer,
+    dump_all_trackers,
     find_timer_for_workspace,
+    reset_all_trackers,
 )
 
 SETTINGS_SENTINEL = {"id": "settings", "totalTimeSelected": True}
@@ -122,3 +126,115 @@ def test_add_tracker_wraps_gnome_extensions_error(
     with pytest.raises(TrackerError, match="reload the Tracker extension"):
         add_tracker_for_current_workspace()
     mock_write.assert_not_called()
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch("et.tracker.gsettings.read_string_array", return_value=[])
+@patch("et.tracker.workspaces.configure_static_workspace_count")
+def test_add_all_configures_static_workspaces_and_creates_ten_timers(
+    mock_configure, mock_read, mock_write, mock_reload
+):
+    results = add_trackers_for_all_workspaces()
+
+    mock_configure.assert_called_once_with(10)
+    assert [r[:2] for r in results] == [(i, f"ET-{i + 1}") for i in range(10)]
+    assert all(created for (_, _, created) in results)
+
+    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
+    assert [entry["name"] for entry in written_entries] == [f"ET-{i + 1}" for i in range(10)]
+    assert all(entry["workspaceId"] == i for i, entry in enumerate(written_entries))
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[json.dumps({"id": "a", "name": "ET-1", "workspaceId": 0})],
+)
+@patch("et.tracker.workspaces.configure_static_workspace_count")
+def test_add_all_skips_workspaces_that_already_have_a_timer(
+    mock_configure, mock_read, mock_write, mock_reload
+):
+    results = add_trackers_for_all_workspaces(count=2)
+
+    assert results == [(0, "ET-1", False), (1, "ET-2", True)]
+    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
+    assert [entry["name"] for entry in written_entries] == ["ET-1", "ET-2"]
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps({"id": "a", "name": "ET-1", "workspaceId": 0}),
+        json.dumps({"id": "b", "name": "ET-2", "workspaceId": 1}),
+    ],
+)
+@patch("et.tracker.workspaces.configure_static_workspace_count")
+def test_add_all_writes_nothing_when_every_timer_already_exists(
+    mock_configure, mock_read, mock_write, mock_reload
+):
+    results = add_trackers_for_all_workspaces(count=2)
+
+    assert results == [(0, "ET-1", False), (1, "ET-2", False)]
+    mock_write.assert_not_called()
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps(SETTINGS_SENTINEL),
+        json.dumps(
+            {"id": "a", "name": "ET-1", "workspaceId": 0, "timeElapsed": 125, "running": True}
+        ),
+        json.dumps({"id": "b", "name": "Test 1", "workspaceId": 1, "timeElapsed": 999}),
+    ],
+)
+def test_reset_all_only_touches_et_prefixed_timers(mock_read, mock_write, mock_reload):
+    reset_names = reset_all_trackers()
+
+    assert reset_names == ["ET-1"]
+    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
+    et_entry = next(e for e in written_entries if e.get("name") == "ET-1")
+    other_entry = next(e for e in written_entries if e.get("name") == "Test 1")
+    assert et_entry["timeElapsed"] == 0
+    assert et_entry["running"] is False
+    assert other_entry["timeElapsed"] == 999
+
+
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[json.dumps(SETTINGS_SENTINEL)],
+)
+def test_reset_all_is_noop_when_no_et_timers_exist(mock_read, mock_write):
+    assert reset_all_trackers() == []
+    mock_write.assert_not_called()
+
+
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps(SETTINGS_SENTINEL),
+        json.dumps({"id": "a", "name": "ET-1", "workspaceId": 0, "timeElapsed": 3725}),
+        json.dumps({"id": "b", "name": "Test 1", "workspaceId": 1, "timeElapsed": 999}),
+    ],
+)
+def test_dump_all_writes_one_file_per_et_timer(mock_read, tmp_path):
+    written = dump_all_trackers(base_dir=tmp_path)
+
+    assert len(written) == 1
+    et_file = written[0]
+    assert et_file.name == "ET-1.txt"
+    assert et_file.parent.name == date.today().isoformat()
+    assert et_file.read_text() == "3725\n1h 2m 5s\n"
+
+
+@patch("et.tracker.gsettings.read_string_array", return_value=[json.dumps(SETTINGS_SENTINEL)])
+def test_dump_all_is_noop_when_no_et_timers_exist(mock_read, tmp_path):
+    assert dump_all_trackers(base_dir=tmp_path) == []
+    assert not (tmp_path / date.today().isoformat()).exists()

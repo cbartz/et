@@ -10,6 +10,7 @@ import pytest
 from et.gsettings import GSettingsError
 from et.workspaces import (
     WorkspaceError,
+    configure_static_workspace_count,
     get_active_workspace_index,
     get_workspace_names,
     rename_active_workspace,
@@ -98,3 +99,22 @@ def test_rename_active_workspace_replaces_existing_name(
     index = rename_active_workspace("focus")
     assert index == 1
     mock_set_names.assert_called_once_with(["a", "focus", "c"])
+
+
+@patch("et.workspaces.gsettings.set_int")
+@patch("et.workspaces.gsettings.set_boolean")
+def test_configure_static_workspace_count_disables_dynamic_and_sets_count(
+    mock_set_boolean, mock_set_int
+):
+    configure_static_workspace_count(10)
+    mock_set_boolean.assert_called_once_with("org.gnome.mutter", "dynamic-workspaces", False)
+    mock_set_int.assert_called_once_with(
+        "org.gnome.desktop.wm.preferences", "num-workspaces", 10
+    )
+
+
+@patch("et.workspaces.gsettings.set_int", side_effect=GSettingsError("boom"))
+@patch("et.workspaces.gsettings.set_boolean")
+def test_configure_static_workspace_count_wraps_gsettings_error(mock_set_boolean, mock_set_int):
+    with pytest.raises(WorkspaceError, match="boom"):
+        configure_static_workspace_count(10)

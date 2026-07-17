@@ -67,16 +67,11 @@ def read_string_array(schema: str, key: str, schema_dir: str | None = None) -> l
     return values
 
 
-def write_string_array(
-    schema: str, key: str, values: list[str], schema_dir: str | None = None
-) -> None:
-    """Write the given list of strings to `schema`'s `key`.
-
-    See `read_string_array` for the meaning of `schema_dir`.
-    """
+def _set_raw(schema: str, key: str, raw_value: str, schema_dir: str | None = None) -> None:
+    """Write a raw GVariant-syntax value string to `schema`'s `key`."""
     _require_binary("gsettings")
     result = subprocess.run(
-        ["gsettings", "set", schema, key, repr(values)],
+        ["gsettings", "set", schema, key, raw_value],
         capture_output=True,
         text=True,
         check=False,
@@ -84,3 +79,23 @@ def write_string_array(
     )
     if result.returncode != 0:
         raise GSettingsError(f"gsettings set failed: {result.stderr.strip()}")
+
+
+def write_string_array(
+    schema: str, key: str, values: list[str], schema_dir: str | None = None
+) -> None:
+    """Write the given list of strings to `schema`'s `key`.
+
+    See `read_string_array` for the meaning of `schema_dir`.
+    """
+    _set_raw(schema, key, repr(values), schema_dir=schema_dir)
+
+
+def set_boolean(schema: str, key: str, value: bool, schema_dir: str | None = None) -> None:
+    """Write a boolean value to `schema`'s `key`."""
+    _set_raw(schema, key, "true" if value else "false", schema_dir=schema_dir)
+
+
+def set_int(schema: str, key: str, value: int, schema_dir: str | None = None) -> None:
+    """Write an integer value to `schema`'s `key`."""
+    _set_raw(schema, key, str(value), schema_dir=schema_dir)

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from et.gsettings import GSettingsError, read_string_array, write_string_array
+from et.gsettings import GSettingsError, read_string_array, set_boolean, set_int, write_string_array
 
 
 def _completed(
@@ -69,3 +69,29 @@ def test_write_string_array_raises_on_nonzero_exit(mock_run, _mock_which):
     mock_run.return_value = _completed(stderr="some failure\n", returncode=1)
     with pytest.raises(GSettingsError, match="gsettings set failed"):
         write_string_array("org.example.schema", "some-key", ["x"])
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_set_boolean_writes_lowercase_true_or_false(mock_run, _mock_which):
+    mock_run.return_value = _completed()
+    set_boolean("org.example.schema", "some-flag", False)
+    args = mock_run.call_args[0][0]
+    assert args == ["gsettings", "set", "org.example.schema", "some-flag", "false"]
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_set_int_writes_stringified_number(mock_run, _mock_which):
+    mock_run.return_value = _completed()
+    set_int("org.example.schema", "some-count", 10)
+    args = mock_run.call_args[0][0]
+    assert args == ["gsettings", "set", "org.example.schema", "some-count", "10"]
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_set_int_raises_on_nonzero_exit(mock_run, _mock_which):
+    mock_run.return_value = _completed(stderr="some failure\n", returncode=1)
+    with pytest.raises(GSettingsError, match="gsettings set failed"):
+        set_int("org.example.schema", "some-count", 10)

@@ -16,6 +16,9 @@ from et.gsettings import GSettingsError
 
 WORKSPACE_NAMES_SCHEMA = "org.gnome.desktop.wm.preferences"
 WORKSPACE_NAMES_KEY = "workspace-names"
+NUM_WORKSPACES_KEY = "num-workspaces"
+MUTTER_SCHEMA = "org.gnome.mutter"
+DYNAMIC_WORKSPACES_KEY = "dynamic-workspaces"
 
 
 class WorkspaceError(RuntimeError):
@@ -62,6 +65,20 @@ def set_workspace_names(names: list[str]) -> None:
     """Write the given list of workspace names to GNOME's settings."""
     try:
         gsettings.write_string_array(WORKSPACE_NAMES_SCHEMA, WORKSPACE_NAMES_KEY, names)
+    except GSettingsError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def configure_static_workspace_count(count: int) -> None:
+    """Switch GNOME to a fixed number of workspaces, disabling dynamic workspaces.
+
+    By default GNOME grows/shrinks the number of workspaces on demand
+    (`dynamic-workspaces=true`). This disables that and pins the workspace
+    count to exactly `count`, so workspaces 0..count-1 always exist.
+    """
+    try:
+        gsettings.set_boolean(MUTTER_SCHEMA, DYNAMIC_WORKSPACES_KEY, False)
+        gsettings.set_int(WORKSPACE_NAMES_SCHEMA, NUM_WORKSPACES_KEY, count)
     except GSettingsError as exc:
         raise WorkspaceError(str(exc)) from exc
 
