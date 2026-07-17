@@ -41,6 +41,7 @@ def test_build_new_timer_matches_tracker_default_shape():
     assert timer["timeElapsed"] == 0
     assert timer["running"] is False
     assert timer["selected"] is False
+    assert timer["autoResume"] is True
     assert isinstance(timer["id"], str) and timer["id"]
 
 

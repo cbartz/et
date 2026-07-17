@@ -32,7 +32,11 @@ def rename(new_name: str) -> None:
 
 @tracker_app.command("add")
 def tracker_add() -> None:
-    """Add a Tracker timer for the current (active) workspace, if none exists yet."""
+    """Add a Tracker timer bound to the current (active) workspace, if none exists yet.
+
+    The new timer auto-starts whenever its workspace is active (and
+    auto-pauses otherwise), same as a manually-started workspace-bound timer.
+    """
     try:
         index, name, created = add_tracker_for_current_workspace()
     except (WorkspaceError, TrackerError) as error:

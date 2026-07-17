@@ -105,7 +105,14 @@ def find_timer_for_workspace(entries: list[TimerEntry], workspace_id: int) -> Ti
 
 
 def build_new_timer(workspace_id: int, name: str) -> TimerEntry:
-    """Build a new Tracker timer dict for `workspace_id`, matching Tracker's own shape."""
+    """Build a new Tracker timer dict for `workspace_id`, matching Tracker's own shape.
+
+    `autoResume` is set to `True` so Tracker auto-starts this timer whenever
+    its workspace becomes active (and auto-pauses it otherwise) — the same
+    state Tracker itself sets when a user manually presses play on a
+    workspace-bound timer. Without it, Tracker only tracks the association
+    but never starts the timer on its own.
+    """
     return {
         "id": str(uuid.uuid4()),
         "name": name,
@@ -113,6 +120,7 @@ def build_new_timer(workspace_id: int, name: str) -> TimerEntry:
         "running": False,
         "selected": False,
         "workspaceId": workspace_id,
+        "autoResume": True,
     }
 
 
