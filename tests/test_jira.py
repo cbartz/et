@@ -22,10 +22,13 @@ def _config(**overrides: object) -> JiraConfig:
     return JiraConfig(**defaults)  # type: ignore[arg-type]
 
 
-def _response(issues: list[dict]) -> MagicMock:
+def _response(issues: list[dict], next_page_token: str | None = None) -> MagicMock:
     response = MagicMock()
     response.status_code = 200
-    response.json.return_value = {"issues": issues}
+    payload: dict[str, object] = {"issues": issues}
+    if next_page_token is not None:
+        payload["nextPageToken"] = next_page_token
+    response.json.return_value = payload
     return response
 
 
@@ -57,7 +60,7 @@ def test_fetch_active_issues_passes_jql_and_basic_auth(mock_get):
     fetch_active_issues(config)
 
     args, kwargs = mock_get.call_args
-    assert args[0] == "https://example.atlassian.net/rest/api/3/search"
+    assert args[0] == "https://example.atlassian.net/rest/api/3/search/jql"
     assert kwargs["params"] == {"jql": config.jql, "fields": "summary,priority"}
     assert kwargs["auth"] == (config.email, config.pat)
 
@@ -86,6 +89,23 @@ def test_fetch_active_issues_raises_on_non_200_status(mock_get):
 
     with pytest.raises(JiraError, match="401"):
         fetch_active_issues(_config())
+
+
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_follows_next_page_token_pagination(mock_get):
+    mock_get.side_effect = [
+        _response([_issue("PROJ-1", "First page task", "High")], next_page_token="page-2"),
+        _response([_issue("PROJ-2", "Second page task", "Highest")]),
+    ]
+
+    issues = fetch_active_issues(_config())
+
+    assert mock_get.call_count == 2
+    first_kwargs = mock_get.call_args_list[0].kwargs
+    second_kwargs = mock_get.call_args_list[1].kwargs
+    assert "nextPageToken" not in first_kwargs["params"]
+    assert second_kwargs["params"]["nextPageToken"] == "page-2"
+    assert {issue.key for issue in issues} == {"PROJ-1", "PROJ-2"}
 
 
 @patch("et.jira.requests.get", side_effect=requests.ConnectionError("no route to host"))
