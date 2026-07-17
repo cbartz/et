@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import typer
 
-from et.config import ConfigError, get_max_workspaces, load_workspace_names
+from et.config import ConfigError, get_max_workspaces, load_config, load_workspace_names
 from et.jira_sync import JiraSyncError, sync_jira_workspaces
 from et.tracker import (
     TrackerError,
@@ -19,6 +20,18 @@ from et.workspaces import WorkspaceError, rename_active_workspace, rename_all_wo
 
 if TYPE_CHECKING:
     from et.jira import JiraIssue
+
+
+def _hyperlink(text: str, url: str) -> str:
+    """Wrap `text` in an OSC 8 terminal hyperlink pointing to `url`.
+
+    Falls back to plain `text` when stdout isn't a terminal (e.g. piped or
+    redirected output), since the escape codes would otherwise be visible.
+    """
+    if not sys.stdout.isatty():
+        return text
+    return f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\"
+
 
 app = typer.Typer(
     help="et: a small CLI for tracking effort and managing your workspace.",
@@ -189,9 +202,18 @@ def jira_get(
             typer.echo("No active Jira issues found.")
             return typer.confirm("Proceed anyway (clears any previously tracked issues)?")
 
+        try:
+            config = load_config()
+            base_url = config.jira.base_url.rstrip("/") if config.jira else ""
+        except ConfigError:
+            base_url = ""
+
         typer.echo("Active issues, highest priority first:")
         for issue in issues:
-            typer.echo(f"  {issue.key} [{issue.priority}] {issue.summary}")
+            key_display = (
+                _hyperlink(issue.key, f"{base_url}/browse/{issue.key}") if base_url else issue.key
+            )
+            typer.echo(f"  {key_display} [{issue.priority}] {issue.summary}")
         return typer.confirm("Proceed with syncing these onto your workspaces?")
 
     def confirm_delete(slot: int, name: str, key: str) -> bool:
