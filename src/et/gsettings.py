@@ -9,6 +9,7 @@ can unit test by mocking `subprocess.run`.
 from __future__ import annotations
 
 import ast
+import os
 import shutil
 import subprocess
 
@@ -22,14 +23,32 @@ def _require_binary(name: str) -> None:
         raise GSettingsError(f"required command not found: {name}")
 
 
-def read_string_array(schema: str, key: str) -> list[str]:
-    """Return the current array-of-strings value of `schema`'s `key`."""
+def _build_env(schema_dir: str | None) -> dict[str, str] | None:
+    """Build a subprocess environment with GSETTINGS_SCHEMA_DIR set, if needed.
+
+    `schema_dir` lets callers point at a schema compiled outside the standard
+    system locations (e.g. a per-user GNOME Shell extension's own compiled
+    schema), which the plain `gsettings` CLI otherwise can't see.
+    """
+    if schema_dir is None:
+        return None
+    return {**os.environ, "GSETTINGS_SCHEMA_DIR": schema_dir}
+
+
+def read_string_array(schema: str, key: str, schema_dir: str | None = None) -> list[str]:
+    """Return the current array-of-strings value of `schema`'s `key`.
+
+    If `schema_dir` is given, `gsettings` is invoked with `GSETTINGS_SCHEMA_DIR`
+    set to it, so schemas compiled outside the standard system locations
+    (e.g. a user-installed GNOME Shell extension's own schema) can be found.
+    """
     _require_binary("gsettings")
     result = subprocess.run(
         ["gsettings", "get", schema, key],
         capture_output=True,
         text=True,
         check=False,
+        env=_build_env(schema_dir),
     )
     if result.returncode != 0:
         raise GSettingsError(f"gsettings get failed: {result.stderr.strip()}")
@@ -48,14 +67,20 @@ def read_string_array(schema: str, key: str) -> list[str]:
     return values
 
 
-def write_string_array(schema: str, key: str, values: list[str]) -> None:
-    """Write the given list of strings to `schema`'s `key`."""
+def write_string_array(
+    schema: str, key: str, values: list[str], schema_dir: str | None = None
+) -> None:
+    """Write the given list of strings to `schema`'s `key`.
+
+    See `read_string_array` for the meaning of `schema_dir`.
+    """
     _require_binary("gsettings")
     result = subprocess.run(
         ["gsettings", "set", schema, key, repr(values)],
         capture_output=True,
         text=True,
         check=False,
+        env=_build_env(schema_dir),
     )
     if result.returncode != 0:
         raise GSettingsError(f"gsettings set failed: {result.stderr.strip()}")
