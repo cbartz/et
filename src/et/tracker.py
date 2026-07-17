@@ -4,7 +4,10 @@ Tracker (tracker@aliakseiz.github.com) persists all of its timers as a list
 of JSON-encoded strings in a single GSettings key. This module reads/writes
 that key via `et.gsettings` and knows how to find or create the timer
 associated with a given workspace. It has no Typer/CLI dependency and reuses
-`et.workspaces` to determine the active workspace and its GNOME name.
+`et.workspaces` to determine the active workspace. New timers are named
+"ET-<workspace number>" (1-indexed) rather than the workspace's GNOME name,
+since workspace names can be renamed or unset and would make timer names
+unstable over time.
 
 A running Tracker instance keeps its own in-memory copy of its timers and
 resaves it (verbatim) in reaction to almost any GSettings change, silently
@@ -132,10 +135,7 @@ def add_tracker_for_current_workspace() -> tuple[int, str, bool]:
     which case no write happens and `timer_name` is the existing timer's name).
     """
     index = workspaces.get_active_workspace_index()
-    ws_names = workspaces.get_workspace_names()
-    default_name = (
-        ws_names[index] if index < len(ws_names) and ws_names[index] else f"Workspace {index + 1}"
-    )
+    default_name = f"ET-{index + 1}"
 
     entries = _load_timers()
     existing = find_timer_for_workspace(entries, index)

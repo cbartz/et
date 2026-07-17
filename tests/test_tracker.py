@@ -48,28 +48,26 @@ def test_build_new_timer_matches_tracker_default_shape():
 @patch("et.tracker.reload_around", return_value=nullcontext())
 @patch("et.tracker.gsettings.write_string_array")
 @patch("et.tracker.gsettings.read_string_array", return_value=[])
-@patch("et.tracker.workspaces.get_workspace_names", return_value=["mails", "handson"])
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_creates_timer_using_workspace_name(
-    mock_get_index, mock_get_names, mock_read, mock_write, mock_reload
+def test_add_tracker_creates_timer_named_with_et_prefix(
+    mock_get_index, mock_read, mock_write, mock_reload
 ):
     index, name, created = add_tracker_for_current_workspace()
-    assert (index, name, created) == (0, "mails", True)
+    assert (index, name, created) == (0, "ET-1", True)
 
     written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
-    assert written_entries == [build_new_timer(0, "mails") | {"id": written_entries[0]["id"]}]
+    assert written_entries == [build_new_timer(0, "ET-1") | {"id": written_entries[0]["id"]}]
 
 
 @patch("et.tracker.reload_around", return_value=nullcontext())
 @patch("et.tracker.gsettings.write_string_array")
 @patch("et.tracker.gsettings.read_string_array", return_value=[])
-@patch("et.tracker.workspaces.get_workspace_names", return_value=[])
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=3)
-def test_add_tracker_falls_back_to_workspace_number_when_unnamed(
-    mock_get_index, mock_get_names, mock_read, mock_write, mock_reload
+def test_add_tracker_names_timer_using_one_indexed_workspace_number(
+    mock_get_index, mock_read, mock_write, mock_reload
 ):
     index, name, created = add_tracker_for_current_workspace()
-    assert (index, name, created) == (3, "Workspace 4", True)
+    assert (index, name, created) == (3, "ET-4", True)
     mock_write.assert_called_once()
 
 
@@ -82,10 +80,9 @@ def test_add_tracker_falls_back_to_workspace_number_when_unnamed(
                      "selected": False, "workspaceId": 0}),
     ],
 )
-@patch("et.tracker.workspaces.get_workspace_names", return_value=["mails"])
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
 def test_add_tracker_is_noop_when_timer_already_exists(
-    mock_get_index, mock_get_names, mock_read, mock_write
+    mock_get_index, mock_read, mock_write
 ):
     index, name, created = add_tracker_for_current_workspace()
     assert (index, name, created) == (0, "mails", False)
@@ -98,10 +95,9 @@ def test_add_tracker_is_noop_when_timer_already_exists(
     "et.tracker.gsettings.read_string_array",
     return_value=[json.dumps(SETTINGS_SENTINEL)],
 )
-@patch("et.tracker.workspaces.get_workspace_names", return_value=["mails"])
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
 def test_add_tracker_preserves_sentinel_entry(
-    mock_get_index, mock_get_names, mock_read, mock_write, mock_reload
+    mock_get_index, mock_read, mock_write, mock_reload
 ):
     add_tracker_for_current_workspace()
     written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
@@ -110,9 +106,8 @@ def test_add_tracker_preserves_sentinel_entry(
 
 
 @patch("et.tracker.gsettings.read_string_array", side_effect=GSettingsError("no schema"))
-@patch("et.tracker.workspaces.get_workspace_names", return_value=["mails"])
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_wraps_gsettings_error(mock_get_index, mock_get_names, mock_read):
+def test_add_tracker_wraps_gsettings_error(mock_get_index, mock_read):
     with pytest.raises(TrackerError, match="Tracker GNOME extension"):
         add_tracker_for_current_workspace()
 
@@ -120,10 +115,9 @@ def test_add_tracker_wraps_gsettings_error(mock_get_index, mock_get_names, mock_
 @patch("et.tracker.reload_around", side_effect=GnomeExtensionsError("could not disable"))
 @patch("et.tracker.gsettings.write_string_array")
 @patch("et.tracker.gsettings.read_string_array", return_value=[])
-@patch("et.tracker.workspaces.get_workspace_names", return_value=["mails"])
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
 def test_add_tracker_wraps_gnome_extensions_error(
-    mock_get_index, mock_get_names, mock_read, mock_write, mock_reload
+    mock_get_index, mock_read, mock_write, mock_reload
 ):
     with pytest.raises(TrackerError, match="reload the Tracker extension"):
         add_tracker_for_current_workspace()
