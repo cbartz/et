@@ -1,15 +1,18 @@
 """Logic for inspecting and renaming GNOME/Ubuntu workspaces.
 
-This module shells out to `wmctrl` (to find the active workspace) and
-`gsettings` (to read/write GNOME's workspace-names setting). It has no
-Typer/CLI dependency so it can be unit tested by mocking `subprocess.run`.
+This module shells out to `wmctrl` (to find the active workspace) and, via
+`et.gsettings`, to `gsettings` (to read/write GNOME's workspace-names
+setting). It has no Typer/CLI dependency so it can be unit tested by mocking
+`subprocess.run`.
 """
 
 from __future__ import annotations
 
-import ast
 import shutil
 import subprocess
+
+from et import gsettings
+from et.gsettings import GSettingsError
 
 WORKSPACE_NAMES_SCHEMA = "org.gnome.desktop.wm.preferences"
 WORKSPACE_NAMES_KEY = "workspace-names"
@@ -49,41 +52,18 @@ def get_active_workspace_index() -> int:
 
 def get_workspace_names() -> list[str]:
     """Return the current list of GNOME workspace names."""
-    _require_binary("gsettings")
-    result = subprocess.run(
-        ["gsettings", "get", WORKSPACE_NAMES_SCHEMA, WORKSPACE_NAMES_KEY],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise WorkspaceError(f"gsettings get failed: {result.stderr.strip()}")
-
-    raw = result.stdout.strip()
-    if raw.startswith("@as "):
-        raw = raw[len("@as "):]
     try:
-        names = ast.literal_eval(raw)
-    except (ValueError, SyntaxError) as exc:
-        raise WorkspaceError(f"could not parse workspace-names value: {raw!r}") from exc
-
-    if not isinstance(names, list) or not all(isinstance(item, str) for item in names):
-        raise WorkspaceError(f"unexpected workspace-names value: {raw!r}")
-
-    return names
+        return gsettings.read_string_array(WORKSPACE_NAMES_SCHEMA, WORKSPACE_NAMES_KEY)
+    except GSettingsError as exc:
+        raise WorkspaceError(str(exc)) from exc
 
 
 def set_workspace_names(names: list[str]) -> None:
     """Write the given list of workspace names to GNOME's settings."""
-    _require_binary("gsettings")
-    result = subprocess.run(
-        ["gsettings", "set", WORKSPACE_NAMES_SCHEMA, WORKSPACE_NAMES_KEY, repr(names)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise WorkspaceError(f"gsettings set failed: {result.stderr.strip()}")
+    try:
+        gsettings.write_string_array(WORKSPACE_NAMES_SCHEMA, WORKSPACE_NAMES_KEY, names)
+    except GSettingsError as exc:
+        raise WorkspaceError(str(exc)) from exc
 
 
 def rename_active_workspace(new_name: str) -> int:

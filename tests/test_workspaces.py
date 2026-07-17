@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from et.gsettings import GSettingsError
 from et.workspaces import (
     WorkspaceError,
     get_active_workspace_index,
@@ -52,33 +53,29 @@ def test_get_active_workspace_index_raises_when_wmctrl_missing(_mock_which):
         get_active_workspace_index()
 
 
-@patch("et.workspaces.shutil.which", return_value="/usr/bin/gsettings")
-@patch("et.workspaces.subprocess.run")
-def test_get_workspace_names_parses_list(mock_run, _mock_which):
-    mock_run.return_value = _completed(stdout="['', 'Focus', '']\n")
+@patch(
+    "et.workspaces.gsettings.read_string_array",
+    return_value=["", "Focus", ""],
+)
+def test_get_workspace_names_parses_list(mock_read):
     assert get_workspace_names() == ["", "Focus", ""]
+    mock_read.assert_called_once_with(
+        "org.gnome.desktop.wm.preferences", "workspace-names"
+    )
 
 
-@patch("et.workspaces.shutil.which", return_value="/usr/bin/gsettings")
-@patch("et.workspaces.subprocess.run")
-def test_get_workspace_names_parses_empty_typed_array(mock_run, _mock_which):
-    mock_run.return_value = _completed(stdout="@as []\n")
-    assert get_workspace_names() == []
+@patch("et.workspaces.gsettings.read_string_array", side_effect=GSettingsError("boom"))
+def test_get_workspace_names_wraps_gsettings_error(mock_read):
+    with pytest.raises(WorkspaceError, match="boom"):
+        get_workspace_names()
 
 
-@patch("et.workspaces.shutil.which", return_value="/usr/bin/gsettings")
-@patch("et.workspaces.subprocess.run")
-def test_set_workspace_names_calls_gsettings_set(mock_run, _mock_which):
-    mock_run.return_value = _completed()
+@patch("et.workspaces.gsettings.write_string_array")
+def test_set_workspace_names_calls_gsettings_helper(mock_write):
     set_workspace_names(["", "Focus"])
-    args = mock_run.call_args[0][0]
-    assert args[:4] == [
-        "gsettings",
-        "set",
-        "org.gnome.desktop.wm.preferences",
-        "workspace-names",
-    ]
-    assert args[4] == "['', 'Focus']"
+    mock_write.assert_called_once_with(
+        "org.gnome.desktop.wm.preferences", "workspace-names", ["", "Focus"]
+    )
 
 
 @patch("et.workspaces.set_workspace_names")
