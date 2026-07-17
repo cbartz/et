@@ -8,7 +8,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from et.cli import _hyperlink, app
-from et.config import EtConfig, JiraConfig
+from et.config import EtConfig, JiraConfig, WorkspaceConfigEntry
 from et.jira import JiraIssue
 from et.jira_sync import JiraSyncResult
 
@@ -27,7 +27,7 @@ def test_hyperlink_returns_plain_text_when_not_a_tty():
         assert _hyperlink("PROJ-1", "https://example.atlassian.net/browse/PROJ-1") == "PROJ-1"
 
 
-def _config() -> EtConfig:
+def _config(workspaces: list[WorkspaceConfigEntry] | None = None) -> EtConfig:
     return EtConfig(
         jira=JiraConfig(
             base_url="https://example.atlassian.net/",
@@ -35,7 +35,7 @@ def _config() -> EtConfig:
             pat="token",
             jql="assignee = currentUser()",
         ),
-        workspaces=[],
+        workspaces=workspaces or [],
         max_workspaces=10,
     )
 
@@ -84,3 +84,94 @@ def test_jira_get_uses_hyperlink_helper_with_jira_browse_url(
         "PROJ-1", "https://example.atlassian.net/browse/PROJ-1"
     )
     assert "<https://example.atlassian.net/browse/PROJ-1|PROJ-1>" in result.stdout
+
+
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_ws_info_shows_description_and_hyperlink_for_jira_linked_workspace(
+    mock_load_config, mock_index
+):
+    mock_index.return_value = 1
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="misc"),
+            WorkspaceConfigEntry(
+                name="Fix login timeout",
+                ref="jira:PROJ-1",
+                description="Fix login timeout on mobile clients",
+            ),
+        ]
+    )
+
+    with patch("sys.stdout.isatty", return_value=False):
+        result = runner.invoke(app, ["ws", "info"])
+
+    assert result.exit_code == 0
+    assert "Workspace 2: Fix login timeout" in result.stdout
+    assert "Fix login timeout on mobile clients" in result.stdout
+    assert "jira:PROJ-1" in result.stdout
+    assert "https://example.atlassian.net/browse/PROJ-1" not in result.stdout  # only in tty link
+
+
+@patch("et.cli._hyperlink", side_effect=lambda text, url: f"<{url}|{text}>")
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_ws_info_uses_hyperlink_helper_with_jira_browse_url(
+    mock_load_config, mock_index, mock_hyperlink
+):
+    mock_index.return_value = 0
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(
+                name="Fix login timeout",
+                ref="jira:PROJ-1",
+                description="Fix login timeout on mobile clients",
+            ),
+        ]
+    )
+
+    result = runner.invoke(app, ["ws", "info"])
+
+    mock_hyperlink.assert_called_once_with(
+        "jira:PROJ-1", "https://example.atlassian.net/browse/PROJ-1"
+    )
+    assert "<https://example.atlassian.net/browse/PROJ-1|jira:PROJ-1>" in result.stdout
+
+
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_ws_info_reports_no_jira_issue_when_workspace_has_no_ref(mock_load_config, mock_index):
+    mock_index.return_value = 0
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="misc")])
+
+    result = runner.invoke(app, ["ws", "info"])
+
+    assert result.exit_code == 0
+    assert "No Jira issue linked to this workspace." in result.stdout
+
+
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_ws_info_reports_no_jira_issue_when_workspace_index_beyond_config_list(
+    mock_load_config, mock_index
+):
+    mock_index.return_value = 5
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="misc")])
+
+    result = runner.invoke(app, ["ws", "info"])
+
+    assert result.exit_code == 0
+    assert "No Jira issue linked to this workspace." in result.stdout
+
+
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_ws_info_reports_error_when_active_workspace_lookup_fails(mock_load_config, mock_index):
+    from et.workspaces import WorkspaceError
+
+    mock_index.side_effect = WorkspaceError("wmctrl not found")
+
+    result = runner.invoke(app, ["ws", "info"])
+
+    assert result.exit_code == 1
+    assert "Error: wmctrl not found" in result.output

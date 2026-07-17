@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import typer
 
 from et.config import ConfigError, get_max_workspaces, load_config, load_workspace_names
-from et.jira_sync import JiraSyncError, sync_jira_workspaces
+from et.jira_sync import JiraSyncError, jira_key_from_ref, sync_jira_workspaces
 from et.tracker import (
     TrackerError,
     add_tracker_for_current_workspace,
@@ -16,7 +16,12 @@ from et.tracker import (
     dump_all_trackers,
     reset_all_trackers,
 )
-from et.workspaces import WorkspaceError, rename_active_workspace, rename_all_workspaces
+from et.workspaces import (
+    WorkspaceError,
+    get_active_workspace_index,
+    rename_active_workspace,
+    rename_all_workspaces,
+)
 
 if TYPE_CHECKING:
     from et.jira import JiraIssue
@@ -85,6 +90,33 @@ def rename(
         raise typer.Exit(code=1) from error
 
     typer.echo(f"Renamed workspace {index + 1} to '{new_name}'")
+
+
+@ws_app.command("info")
+def info() -> None:
+    """Show the Jira issue (description + link) linked to the active workspace, if any."""
+    try:
+        index = get_active_workspace_index()
+        config = load_config()
+    except (ConfigError, WorkspaceError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    entry = config.workspaces[index] if index < len(config.workspaces) else None
+    key = jira_key_from_ref(entry.ref) if entry else None
+
+    if entry is None or key is None:
+        typer.echo("No Jira issue linked to this workspace.")
+        return
+
+    typer.echo(f"Workspace {index + 1}: {entry.name}")
+    typer.echo(entry.description or "(no description)")
+
+    base_url = config.jira.base_url.rstrip("/") if config.jira else ""
+    if base_url:
+        typer.echo(_hyperlink(f"jira:{key}", f"{base_url}/browse/{key}"))
+    else:
+        typer.echo(f"jira:{key}")
 
 
 @tracker_app.command("add")
