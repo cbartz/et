@@ -75,7 +75,8 @@ et tracker dump --all       # write every ET-<n> timer to ~/timers/<date>/
 ```
 
 Each dumped file contains two lines: the raw elapsed seconds, then a
-human-readable duration (e.g. `2h 15m 30s`).
+human-readable duration (e.g. `2h 15m 30s`). The human-readable duration of
+each dumped timer is also printed to stdout.
 
 ### Jira sync
 

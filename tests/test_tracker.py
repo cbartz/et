@@ -231,7 +231,9 @@ def test_dump_all_writes_one_file_per_et_timer(mock_read, tmp_path):
     written = dump_all_trackers(base_dir=tmp_path)
 
     assert len(written) == 1
-    et_file = written[0]
+    name, et_file, duration = written[0]
+    assert name == "ET-1"
+    assert duration == "1h 2m 5s"
     assert et_file.name == "ET-1.txt"
     assert et_file.parent.name == date.today().isoformat()
     assert et_file.read_text() == "3725\n1h 2m 5s\n"
@@ -292,10 +294,11 @@ def test_reset_current_workspace_is_noop_without_et_timer(mock_index, mock_read,
 )
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=1)
 def test_dump_current_workspace_writes_its_timer(mock_index, mock_read, tmp_path):
-    index, path = dump_tracker_for_current_workspace(base_dir=tmp_path)
+    index, path, duration = dump_tracker_for_current_workspace(base_dir=tmp_path)
 
     assert index == 1
     assert path is not None
+    assert duration == "1h 2m 5s"
     assert path.name == "ET-2.txt"
     assert path.parent.name == date.today().isoformat()
     assert path.read_text() == "3725\n1h 2m 5s\n"
@@ -304,9 +307,9 @@ def test_dump_current_workspace_writes_its_timer(mock_index, mock_read, tmp_path
 @patch("et.tracker.gsettings.read_string_array", return_value=[json.dumps(SETTINGS_SENTINEL)])
 @patch("et.tracker.workspaces.get_active_workspace_index", return_value=3)
 def test_dump_current_workspace_is_noop_without_et_timer(mock_index, mock_read, tmp_path):
-    index, path = dump_tracker_for_current_workspace(base_dir=tmp_path)
+    index, path, duration = dump_tracker_for_current_workspace(base_dir=tmp_path)
 
-    assert (index, path) == (3, None)
+    assert (index, path, duration) == (3, None, None)
     assert not (tmp_path / date.today().isoformat()).exists()
 
 
@@ -314,8 +317,9 @@ def test_dump_timer_to_file_writes_seconds_and_duration(tmp_path):
     entry = {"id": "a", "name": "ET-1", "timeElapsed": 3725}
     path = tmp_path / "nested" / "ET-1.txt"
 
-    dump_timer_to_file(entry, path)
+    duration = dump_timer_to_file(entry, path)
 
+    assert duration == "1h 2m 5s"
     assert path.read_text() == "3725\n1h 2m 5s\n"
 
 
@@ -323,6 +327,7 @@ def test_dump_timer_to_file_treats_missing_elapsed_as_zero(tmp_path):
     entry = {"id": "a", "name": "ET-1"}
     path = tmp_path / "ET-1.txt"
 
-    dump_timer_to_file(entry, path)
+    duration = dump_timer_to_file(entry, path)
 
+    assert duration == "0h 0m 0s"
     assert path.read_text() == "0\n0h 0m 0s\n"

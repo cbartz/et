@@ -256,58 +256,65 @@ def format_duration(seconds: float) -> str:
     return f"{hours}h {minutes}m {secs}s"
 
 
-def dump_timer_to_file(entry: TimerEntry, path: Path) -> None:
+def dump_timer_to_file(entry: TimerEntry, path: Path) -> str:
     """Write `entry`'s elapsed time to `path` (creating its parent directory).
 
     The file contains two lines: the raw elapsed seconds, then a
-    human-readable duration (e.g. "2h 15m 30s").
+    human-readable duration (e.g. "2h 15m 30s"). Returns that human-readable
+    duration so callers can also surface it to the user.
     """
     elapsed = entry.get("timeElapsed", 0)
     seconds = elapsed if isinstance(elapsed, (int, float)) else 0
+    duration = format_duration(seconds)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{int(seconds)}\n{format_duration(seconds)}\n")
+    path.write_text(f"{int(seconds)}\n{duration}\n")
+    return duration
 
 
-def dump_all_trackers(base_dir: Path | None = None) -> list[Path]:
+def dump_all_trackers(base_dir: Path | None = None) -> list[tuple[str, Path, str]]:
     """Write each "ET-<n>" timer's elapsed time to a file under `base_dir`.
 
     Files are written to `<base_dir>/<yyyy-mm-dd>/ET-<n>.txt` (`base_dir`
     defaults to `~/timers`), each containing two lines: the raw elapsed
-    seconds, then a human-readable duration (e.g. "2h 15m 30s"). Returns the
-    list of file paths written, in the order timers were found.
+    seconds, then a human-readable duration (e.g. "2h 15m 30s"). Returns one
+    (timer_name, file_path, human_readable_duration) tuple per timer written,
+    in the order timers were found.
     """
     entries = load_timers()
     root = base_dir if base_dir is not None else Path.home() / "timers"
     out_dir = root / date.today().isoformat()
 
-    written: list[Path] = []
+    written: list[tuple[str, Path, str]] = []
     for entry in entries:
         name = entry.get("name")
         if not isinstance(name, str) or not _ET_TIMER_NAME_RE.match(name):
             continue
 
         path = out_dir / f"{name}.txt"
-        dump_timer_to_file(entry, path)
-        written.append(path)
+        duration = dump_timer_to_file(entry, path)
+        written.append((name, path, duration))
 
     return written
 
 
-def dump_tracker_for_current_workspace(base_dir: Path | None = None) -> tuple[int, Path | None]:
+def dump_tracker_for_current_workspace(
+    base_dir: Path | None = None,
+) -> tuple[int, Path | None, str | None]:
     """Write the active workspace's ET-<n> timer elapsed time to a file.
 
     The file is written to `<base_dir>/<yyyy-mm-dd>/ET-<n>.txt` (`base_dir`
-    defaults to `~/timers`). Returns (workspace_index, path), where `path` is
-    None if no ET-<n> timer is bound to the active workspace.
+    defaults to `~/timers`). Returns (workspace_index, path, duration), where
+    `path` and `duration` are None if no ET-<n> timer is bound to the active
+    workspace, and `duration` is the human-readable elapsed time otherwise.
     """
     index = workspaces.get_active_workspace_index()
     entries = load_timers()
     timer = find_timer_for_workspace(entries, index)
     name = timer.get("name") if timer is not None else None
     if timer is None or not isinstance(name, str) or not _ET_TIMER_NAME_RE.match(name):
-        return index, None
+        return index, None, None
 
     root = base_dir if base_dir is not None else Path.home() / "timers"
     path = root / date.today().isoformat() / f"{name}.txt"
-    dump_timer_to_file(timer, path)
-    return index, path
+    duration = dump_timer_to_file(timer, path)
+    return index, path, duration

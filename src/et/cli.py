@@ -214,11 +214,13 @@ def tracker_dump(
 ) -> None:
     """Save each ET-<n> tracker's elapsed time to a file under ~/timers/<yyyy-mm-dd>/.
 
-    Without --all, dumps only the ET-<n> timer bound to the active workspace.
+    Each tracker's elapsed time is also printed to stdout in a human-readable
+    form (e.g. "ET-1: 2h 15m 30s"). Without --all, dumps only the ET-<n> timer
+    bound to the active workspace.
     """
     if not all_workspaces:
         try:
-            index, path = dump_tracker_for_current_workspace()
+            index, path, duration = dump_tracker_for_current_workspace()
         except (WorkspaceError, TrackerError) as error:
             typer.echo(f"Error: {error}", err=True)
             raise typer.Exit(code=1) from error
@@ -226,6 +228,7 @@ def tracker_dump(
         if path is None:
             typer.echo(f"No ET-<n> tracker bound to workspace {index + 1} to dump")
         else:
+            typer.echo(f"{path.stem}: {duration}")
             typer.echo(f"Wrote {path}")
         return
 
@@ -239,7 +242,8 @@ def tracker_dump(
         typer.echo("No ET-<n> trackers found to dump")
         return
 
-    for path in written:
+    for name, path, duration in written:
+        typer.echo(f"{name}: {duration}")
         typer.echo(f"Wrote {path}")
 
 

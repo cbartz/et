@@ -205,15 +205,16 @@ def test_tracker_reset_all_reports_each_reset_timer(mock_reset):
 @patch("et.cli.dump_tracker_for_current_workspace")
 def test_tracker_dump_current_workspace_reports_written_path(mock_dump, tmp_path):
     path = tmp_path / "ET-1.txt"
-    mock_dump.return_value = (0, path)
+    mock_dump.return_value = (0, path, "1h 2m 5s")
 
     result = runner.invoke(app, ["tracker", "dump"])
 
     assert result.exit_code == 0
+    assert "ET-1: 1h 2m 5s" in result.stdout
     assert f"Wrote {path}" in result.stdout
 
 
-@patch("et.cli.dump_tracker_for_current_workspace", return_value=(4, None))
+@patch("et.cli.dump_tracker_for_current_workspace", return_value=(4, None, None))
 def test_tracker_dump_current_workspace_reports_when_no_timer_bound(mock_dump):
     result = runner.invoke(app, ["tracker", "dump"])
 
