@@ -10,7 +10,6 @@ from typer.testing import CliRunner
 from et.cli import _hyperlink, app
 from et.config import EtConfig, JiraConfig, WorkspaceConfigEntry
 from et.jira import JiraIssue
-from et.jira_sync import JiraSyncResult
 from et.jira_time import JiraLogTimeError, LogTimeResult
 from et.task import TaskCompleteResult, TaskCreateResult, TaskError
 from et.tracker import TrackerError
@@ -41,52 +40,6 @@ def _config(workspaces: list[WorkspaceConfigEntry] | None = None) -> EtConfig:
         workspaces=workspaces or [],
         max_workspaces=10,
     )
-
-
-def _empty_result() -> JiraSyncResult:
-    return JiraSyncResult(assigned=[], moved=[], kept=[], deleted=[], skipped=[])
-
-
-@patch("et.cli.load_config")
-@patch("et.cli.sync_jira_workspaces")
-def test_jira_get_prints_plain_issue_keys_when_not_a_tty(mock_sync, mock_load_config):
-    mock_load_config.return_value = _config()
-    issue = JiraIssue(key="PROJ-1", summary="Do the thing", priority="High")
-
-    def fake_sync(confirm_plan, confirm_delete):
-        confirm_plan([issue])
-        return _empty_result()
-
-    mock_sync.side_effect = fake_sync
-
-    with patch("sys.stdout.isatty", return_value=False):
-        result = runner.invoke(app, ["jira", "get"], input="n\n")
-
-    assert "  PROJ-1 [High] Do the thing" in result.stdout
-    assert "\x1b]8;;" not in result.stdout
-
-
-@patch("et.cli._hyperlink", side_effect=lambda text, url: f"<{url}|{text}>")
-@patch("et.cli.load_config")
-@patch("et.cli.sync_jira_workspaces")
-def test_jira_get_uses_hyperlink_helper_with_jira_browse_url(
-    mock_sync, mock_load_config, mock_hyperlink
-):
-    mock_load_config.return_value = _config()
-    issue = JiraIssue(key="PROJ-1", summary="Do the thing", priority="High")
-
-    def fake_sync(confirm_plan, confirm_delete):
-        confirm_plan([issue])
-        return _empty_result()
-
-    mock_sync.side_effect = fake_sync
-
-    result = runner.invoke(app, ["jira", "get"], input="n\n")
-
-    mock_hyperlink.assert_called_once_with(
-        "PROJ-1", "https://example.atlassian.net/browse/PROJ-1"
-    )
-    assert "<https://example.atlassian.net/browse/PROJ-1|PROJ-1>" in result.stdout
 
 
 @patch("et.cli.get_active_workspace_index")
@@ -216,134 +169,6 @@ def test_ws_delete_force_passes_flag_through(mock_delete):
     assert result.exit_code == 0
     mock_delete.assert_called_once_with(force=True)
     assert "Deleted workspace 1" in result.stdout
-
-
-@patch("et.cli.reset_tracker_for_current_workspace", return_value=(0, "ET-1"))
-def test_tracker_reset_current_workspace_reports_reset_timer(mock_reset):
-    result = runner.invoke(app, ["tracker", "reset"])
-
-    assert result.exit_code == 0
-    assert "Reset tracker 'ET-1' to 0" in result.stdout
-
-
-@patch("et.cli.reset_tracker_for_current_workspace", return_value=(2, None))
-def test_tracker_reset_current_workspace_reports_when_no_timer_bound(mock_reset):
-    result = runner.invoke(app, ["tracker", "reset"])
-
-    assert result.exit_code == 0
-    assert "No ET-<n> tracker bound to workspace 3 to reset" in result.stdout
-
-
-@patch("et.cli.reset_all_trackers", return_value=["ET-1", "ET-2"])
-def test_tracker_reset_all_reports_each_reset_timer(mock_reset):
-    result = runner.invoke(app, ["tracker", "reset", "--all"])
-
-    assert result.exit_code == 0
-    assert "Reset tracker 'ET-1' to 0" in result.stdout
-    assert "Reset tracker 'ET-2' to 0" in result.stdout
-
-
-@patch("et.cli.dump_tracker_for_current_workspace")
-def test_tracker_dump_current_workspace_reports_written_path(mock_dump, tmp_path):
-    path = tmp_path / "ET-1.txt"
-    mock_dump.return_value = (0, path, "1h 2m 5s")
-
-    result = runner.invoke(app, ["tracker", "dump"])
-
-    assert result.exit_code == 0
-    assert "ET-1: 1h 2m 5s" in result.stdout
-    assert f"Wrote {path}" in result.stdout
-
-
-@patch("et.cli.dump_tracker_for_current_workspace", return_value=(4, None, None))
-def test_tracker_dump_current_workspace_reports_when_no_timer_bound(mock_dump):
-    result = runner.invoke(app, ["tracker", "dump"])
-
-    assert result.exit_code == 0
-    assert "No ET-<n> tracker bound to workspace 5 to dump" in result.stdout
-
-
-@patch("et.cli.load_config")
-@patch("et.cli.sync_jira_workspaces")
-def test_jira_get_reports_kept_workspaces(mock_sync, mock_load_config):
-    mock_load_config.return_value = _config()
-    mock_sync.return_value = JiraSyncResult(
-        assigned=[], moved=[], kept=[(1, "PROJ-9")], deleted=[], skipped=[]
-    )
-
-    result = runner.invoke(app, ["jira", "get"], input="y\n")
-
-    assert result.exit_code == 0
-    assert "Kept workspace 2 on jira:PROJ-9" in result.stdout
-
-
-@patch("et.cli.load_config")
-@patch("et.cli.sync_jira_workspaces")
-def test_jira_get_annotates_each_issue_with_its_workspace_action(mock_sync, mock_load_config):
-    config = _config(
-        workspaces=[
-            WorkspaceConfigEntry(name="Keep", type="dynamic", ref="jira:KEEP"),
-            WorkspaceConfigEntry(name="Move", type="dynamic", ref="jira:MOVE"),
-        ]
-    )
-    mock_load_config.return_value = config
-    issues = [
-        JiraIssue(key="KEEP", summary="Keep summary", priority="High"),
-        JiraIssue(key="NEW", summary="New summary", priority="Medium"),
-        JiraIssue(key="MOVE", summary="Move summary", priority="Low"),
-    ]
-
-    def fake_sync(confirm_plan, confirm_delete):
-        confirm_plan(issues)
-        return _empty_result()
-
-    mock_sync.side_effect = fake_sync
-
-    result = runner.invoke(app, ["jira", "get"], input="n\n")
-
-    assert "KEEP [High] Keep summary  (ws unchanged (1))" in result.stdout
-    assert "NEW [Medium] New summary  (ws created (2))" in result.stdout
-    assert "MOVE [Low] Move summary  (ws move (2 -> 3))" in result.stdout
-
-
-@patch("et.cli.log_time_for_current_workspace")
-def test_jira_log_time_reports_logged_duration_and_reset(mock_log_time):
-    mock_log_time.return_value = LogTimeResult(
-        workspace_index=1, issue_key="ISD-321", seconds_logged=4320, tracker_reset=True
-    )
-
-    result = runner.invoke(app, ["jira", "log-time"])
-
-    assert result.exit_code == 0
-    assert "Logged 1h 12m 0s to jira:ISD-321 (workspace 2)" in result.stdout
-    assert "Reset tracker to 0" in result.stdout
-    mock_log_time.assert_called_once_with(description=None, reset=True)
-
-
-@patch("et.cli.log_time_for_current_workspace")
-def test_jira_log_time_passes_comment_and_no_reset_flags(mock_log_time):
-    mock_log_time.return_value = LogTimeResult(
-        workspace_index=0, issue_key="ISD-321", seconds_logged=60, tracker_reset=False
-    )
-
-    result = runner.invoke(
-        app, ["jira", "log-time", "--comment", "Investigating", "--no-reset"]
-    )
-
-    assert result.exit_code == 0
-    assert "Logged 0h 1m 0s to jira:ISD-321 (workspace 1)" in result.stdout
-    assert "Reset tracker to 0" not in result.stdout
-    mock_log_time.assert_called_once_with(description="Investigating", reset=False)
-
-
-@patch("et.cli.log_time_for_current_workspace")
-def test_jira_log_time_reports_error(mock_log_time):
-    mock_log_time.side_effect = JiraLogTimeError("no Jira issue linked to workspace 1")
-
-    result = runner.invoke(app, ["jira", "log-time"])
-
-    assert result.exit_code == 1
-    assert "Error: no Jira issue linked to workspace 1" in result.output
 
 
 # --- et task -----------------------------------------------------------------
@@ -527,7 +352,7 @@ def test_task_create_defaults_to_from_jira(mock_create_from_jira):
 
 
 @patch("et.cli.log_time_for_current_workspace")
-def test_task_log_time_delegates_to_jira_log_time(mock_log_time):
+def test_task_log_time_logs_and_reports_duration(mock_log_time):
     mock_log_time.return_value = LogTimeResult(
         workspace_index=1, issue_key="ISD-321", seconds_logged=4320, tracker_reset=True
     )

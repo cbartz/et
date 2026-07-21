@@ -1,13 +1,12 @@
 """Orchestrates the `et task` command group: a friendlier, task-centric
-layer on top of `et ws`/`et tracker`/`et jira` (which are unaffected and
-still work standalone).
+layer on top of the Tracker and Jira integrations (`et.tracker`,
+`et.jira`, `et.jira_sync`, `et.jira_time`), plus `et ws`.
 
 `et task create` allocates a free workspace slot (growing the configured
 list, and bumping `max_workspaces` itself if the current cap is already
-full, mirroring `et jira get`'s slot logic), creates its Tracker timer,
-and switches GNOME to it — by default picking the slot's
-name/description/Jira link from the user's active Jira issues
-(`--from-jira`, the default; pass `--manual` to name it yourself
+full), creates its Tracker timer, and switches GNOME to it — by default
+picking the slot's name/description/Jira link from the user's active Jira
+issues (`--from-jira`, the default; pass `--manual` to name it yourself
 instead). `et task complete` logs the active workspace's tracked time to
 Jira (reusing `et.jira_time.log_time_for_current_workspace`), resets that
 workspace back to a bare "ET-<n>" slot, and shifts every non-`static`
@@ -65,13 +64,13 @@ def create_task_workspace(
 ) -> TaskCreateResult:
     """Allocate a free workspace slot for a new task, name it, and switch to it.
 
-    Picks the first non-`static` slot with no `ref` (as `et jira get`
-    does), growing the configured workspace list if none is free —
-    including bumping `max_workspaces` itself when the current cap has
-    already been reached, so `et task create` never fails for lack of
-    room. Saves the updated config, creates the slot's Tracker timer,
-    renames the GNOME workspaces to match, and switches the active GNOME
-    workspace to the new slot.
+    Picks the first non-`static` slot with no `ref`, growing the
+    configured workspace list if none is free — including bumping
+    `max_workspaces` itself when the current cap has already been
+    reached, so `et task create` never fails for lack of room. Saves the
+    updated config, creates the slot's Tracker timer, renames the GNOME
+    workspaces to match, and switches the active GNOME workspace to the
+    new slot.
 
     Raises `ConfigError` if the config file is missing/malformed, and
     `WorkspaceError`/`TrackerError` (via `TaskError`) if the underlying

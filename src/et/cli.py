@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import typer
 
-from et.config import ConfigError, get_max_workspaces, load_config, load_workspace_names
-from et.jira_sync import JiraSyncError, jira_key_from_ref, preview_reshuffle, sync_jira_workspaces
+from et.config import ConfigError, load_config, load_workspace_names
+from et.jira_sync import jira_key_from_ref
 from et.jira_time import JiraLogTimeError, log_time_for_current_workspace
 from et.task import (
     TaskError,
@@ -17,18 +17,7 @@ from et.task import (
     create_task_from_jira,
     create_task_workspace,
 )
-from et.tracker import (
-    TrackerError,
-    add_tracker_for_current_workspace,
-    add_trackers_for_all_workspaces,
-    dump_all_trackers,
-    dump_tracker_for_current_workspace,
-    find_timer_for_workspace,
-    format_duration,
-    load_timers,
-    reset_all_trackers,
-    reset_tracker_for_current_workspace,
-)
+from et.tracker import TrackerError, find_timer_for_workspace, format_duration, load_timers
 from et.workspaces import (
     WorkspaceError,
     get_active_workspace_index,
@@ -54,32 +43,6 @@ def _hyperlink(text: str, url: str) -> str:
     return f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\"
 
 
-def _preview_workspace_actions(
-    config: EtConfig | None, issues: list[JiraIssue]
-) -> dict[str, str]:
-    """Map each issue key to a human-readable note about its workspace change.
-
-    Notes are 1-indexed to match the rest of the CLI's workspace numbering:
-    "ws unchanged (N)", "ws move (OLD -> NEW)", "ws created (N)", and
-    "no free workspace slot" for issues that won't fit. Returns an empty map
-    when `config` is unavailable (so annotations are simply omitted).
-    """
-    if config is None:
-        return {}
-
-    outcome = preview_reshuffle(config, issues)
-    actions: dict[str, str] = {}
-    for slot, key in outcome.kept:
-        actions[key] = f"ws unchanged ({slot + 1})"
-    for slot, key in outcome.assigned:
-        actions[key] = f"ws created ({slot + 1})"
-    for key, old_slot, new_slot in outcome.moved:
-        actions[key] = f"ws move ({old_slot + 1} -> {new_slot + 1})"
-    for key in outcome.skipped:
-        actions[key] = "no free workspace slot"
-    return actions
-
-
 app = typer.Typer(
     help="et: a small CLI for tracking effort and managing your workspace.",
     no_args_is_help=True,
@@ -87,13 +50,9 @@ app = typer.Typer(
 ws_app = typer.Typer(help="Interact with GNOME/Ubuntu workspaces.", no_args_is_help=True)
 app.add_typer(ws_app, name="ws")
 
-tracker_app = typer.Typer(help="Manage Tracker extension timers.", no_args_is_help=True)
-app.add_typer(tracker_app, name="tracker")
-jira_app = typer.Typer(help="Sync GNOME workspaces with active Jira issues.", no_args_is_help=True)
-app.add_typer(jira_app, name="jira")
-
 task_app = typer.Typer(
-    help="Convenience layer around ws/tracker/jira for a single task's lifecycle.",
+    help="Convenience layer around ws (plus the Tracker/Jira integrations) for a single "
+    "task's lifecycle.",
     no_args_is_help=True,
 )
 app.add_typer(task_app, name="task")
@@ -221,231 +180,6 @@ def ws_delete(
     typer.echo(f"Now managing {result.remaining_workspaces} workspaces")
 
 
-@tracker_app.command("add")
-def tracker_add(
-    all_workspaces: bool = typer.Option(
-        False,
-        "--all",
-        help="Configure 10 static workspaces and create a timer for each.",
-    ),
-) -> None:
-    """Add a Tracker timer bound to the current (active) workspace, if none exists yet.
-
-    The new timer auto-starts whenever its workspace is active (and
-    auto-pauses otherwise), same as a manually-started workspace-bound timer.
-    """
-    if all_workspaces:
-        try:
-            results = add_trackers_for_all_workspaces(count=get_max_workspaces())
-        except (WorkspaceError, TrackerError) as error:
-            typer.echo(f"Error: {error}", err=True)
-            raise typer.Exit(code=1) from error
-
-        for index, name, created in results:
-            verb = "Added" if created else "Already exists:"
-            typer.echo(f"{verb} tracker '{name}' for workspace {index + 1}")
-        return
-
-    try:
-        index, name, created = add_tracker_for_current_workspace()
-    except (WorkspaceError, TrackerError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
-    if created:
-        typer.echo(f"Added tracker '{name}' for workspace {index + 1}")
-    else:
-        typer.echo(f"Tracker '{name}' already exists for workspace {index + 1}")
-
-
-@tracker_app.command("reset")
-def tracker_reset(
-    all_workspaces: bool = typer.Option(
-        False,
-        "--all",
-        help="Reset every ET-<n> tracker's elapsed time to 0 and stop it.",
-    ),
-) -> None:
-    """Reset ET-<n> trackers to 0 elapsed time.
-
-    Without --all, resets only the ET-<n> timer bound to the active workspace.
-    """
-    if not all_workspaces:
-        try:
-            index, name = reset_tracker_for_current_workspace()
-        except (WorkspaceError, TrackerError) as error:
-            typer.echo(f"Error: {error}", err=True)
-            raise typer.Exit(code=1) from error
-
-        if name is None:
-            typer.echo(f"No ET-<n> tracker bound to workspace {index + 1} to reset")
-        else:
-            typer.echo(f"Reset tracker '{name}' to 0")
-        return
-
-    try:
-        reset_names = reset_all_trackers()
-    except TrackerError as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
-    if not reset_names:
-        typer.echo("No ET-<n> trackers found to reset")
-        return
-
-    for name in reset_names:
-        typer.echo(f"Reset tracker '{name}' to 0")
-
-
-@tracker_app.command("dump")
-def tracker_dump(
-    all_workspaces: bool = typer.Option(
-        False,
-        "--all",
-        help="Dump every ET-<n> tracker's elapsed time to ~/timers/<yyyy-mm-dd>/.",
-    ),
-) -> None:
-    """Save each ET-<n> tracker's elapsed time to a file under ~/timers/<yyyy-mm-dd>/.
-
-    Each tracker's elapsed time is also printed to stdout in a human-readable
-    form (e.g. "ET-1: 2h 15m 30s"). Without --all, dumps only the ET-<n> timer
-    bound to the active workspace.
-    """
-    if not all_workspaces:
-        try:
-            index, path, duration = dump_tracker_for_current_workspace()
-        except (WorkspaceError, TrackerError) as error:
-            typer.echo(f"Error: {error}", err=True)
-            raise typer.Exit(code=1) from error
-
-        if path is None:
-            typer.echo(f"No ET-<n> tracker bound to workspace {index + 1} to dump")
-        else:
-            typer.echo(f"{path.stem}: {duration}")
-            typer.echo(f"Wrote {path}")
-        return
-
-    try:
-        written = dump_all_trackers()
-    except TrackerError as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
-    if not written:
-        typer.echo("No ET-<n> trackers found to dump")
-        return
-
-    for name, path, duration in written:
-        typer.echo(f"{name}: {duration}")
-        typer.echo(f"Wrote {path}")
-
-
-@jira_app.command("get")
-def jira_get(
-    no_prompt: bool = typer.Option(
-        False,
-        "--no-prompt",
-        help="Skip the issue-list confirmation and auto-confirm workspace deletions.",
-    ),
-) -> None:
-    """Fetch active Jira issues and sync GNOME workspaces to match.
-
-    Renames/describes non-static workspaces after your active issues
-    (highest priority first), moving Tracker timers along with each issue
-    when its slot changes. Workspaces whose tracked issue is no longer
-    active are reset back to a plain ET-<n> slot after confirmation (their
-    timer is first dumped to ~/timers/by-id/jira-<KEY>.txt and reset).
-    """
-
-    def confirm_plan(issues: list[JiraIssue]) -> bool:
-        if no_prompt:
-            return True
-        if not issues:
-            typer.echo("No active Jira issues found.")
-            return typer.confirm("Proceed anyway (clears any previously tracked issues)?")
-
-        try:
-            config = load_config()
-        except ConfigError:
-            config = None
-        base_url = config.jira.base_url.rstrip("/") if config and config.jira else ""
-
-        workspace_actions = _preview_workspace_actions(config, issues)
-
-        typer.echo("Active issues, highest priority first:")
-        for issue in issues:
-            key_display = (
-                _hyperlink(issue.key, f"{base_url}/browse/{issue.key}") if base_url else issue.key
-            )
-            action = workspace_actions.get(issue.key)
-            suffix = f"  ({action})" if action else ""
-            typer.echo(f"  {key_display} [{issue.priority}] {issue.summary}{suffix}")
-        return typer.confirm("Proceed with syncing these onto your workspaces?")
-
-    def confirm_delete(slot: int, name: str, key: str) -> bool:
-        if no_prompt:
-            return True
-        return typer.confirm(
-            f"Workspace {slot + 1} ('{name}', tracking {key}) is no longer active. Delete it?"
-        )
-
-    try:
-        result = sync_jira_workspaces(confirm_plan=confirm_plan, confirm_delete=confirm_delete)
-    except (ConfigError, JiraSyncError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
-    for slot, key in result.assigned:
-        typer.echo(f"Assigned workspace {slot + 1} to jira:{key}")
-    for key, old_slot, new_slot in result.moved:
-        typer.echo(f"Moved jira:{key} from workspace {old_slot + 1} to {new_slot + 1}")
-    for slot, key in result.kept:
-        typer.echo(f"Kept workspace {slot + 1} on jira:{key}")
-    for slot, key in result.deleted:
-        typer.echo(f"Deleted workspace {slot + 1} (jira:{key} no longer active)")
-    for key in result.skipped:
-        typer.echo(f"Skipped jira:{key} (no free workspace slots)", err=True)
-
-    if not (
-        result.assigned or result.moved or result.kept or result.deleted or result.skipped
-    ):
-        typer.echo("Nothing to do — workspaces already match your active issues.")
-
-
-@jira_app.command("log-time")
-def jira_log_time(
-    comment: str | None = typer.Option(
-        None, "--comment", "-m", help="Worklog description/comment to attach in Jira."
-    ),
-    no_reset: bool = typer.Option(
-        False,
-        "--no-reset",
-        help="Don't reset the tracker after logging (leaves its elapsed time as-is).",
-    ),
-) -> None:
-    """Log the active workspace's tracked time to its Jira issue.
-
-    Reads the elapsed time from the ET-<n> Tracker timer bound to the active
-    workspace, resolves the Jira issue linked to that workspace (see `et
-    jira get`/`et ws info`), and logs it as a Jira worklog for that issue
-    (via Jira's own worklog API, which also shows up in Tempo timesheets
-    when Tempo is configured to sync native Jira worklogs). The tracker is
-    reset to 0 afterwards, unless --no-reset is given.
-    """
-    try:
-        result = log_time_for_current_workspace(description=comment, reset=not no_reset)
-    except (ConfigError, WorkspaceError, JiraLogTimeError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
-    duration = format_duration(result.seconds_logged)
-    typer.echo(
-        f"Logged {duration} to jira:{result.issue_key} (workspace {result.workspace_index + 1})"
-    )
-    if result.tracker_reset:
-        typer.echo("Reset tracker to 0")
-
-
 def _print_task_created(result: TaskCreateResult) -> None:
     key = jira_key_from_ref(result.ref)
     ref_suffix = f" (linked to {key})" if key else ""
@@ -504,8 +238,8 @@ def task_create(
     By default (or with --from-jira), lists your active Jira issues that
     aren't already linked to a workspace and lets you pick one (its
     summary becomes the workspace name/description and its key is
-    linked, same as `et jira get`). With --manual, prompts interactively
-    for a name/description when not given as arguments/options instead.
+    linked). With --manual, prompts interactively for a name/description
+    when not given as arguments/options instead.
     """
     if manual and from_jira:
         typer.echo("Error: --manual and --from-jira are mutually exclusive", err=True)
@@ -586,8 +320,27 @@ def task_log_time(
         help="Don't reset the tracker after logging (leaves its elapsed time as-is).",
     ),
 ) -> None:
-    """Log the active task's tracked time to its Jira issue (same as `et jira log-time`)."""
-    jira_log_time(comment=comment, no_reset=no_reset)
+    """Log the active task's tracked time to its Jira issue.
+
+    Reads the elapsed time from the ET-<n> Tracker timer bound to the
+    active workspace, resolves the Jira issue linked to that workspace
+    (see `et ws info`), and logs it as a Jira worklog for that issue (via
+    Jira's own worklog API, which also shows up in Tempo timesheets when
+    Tempo is configured to sync native Jira worklogs). The tracker is
+    reset to 0 afterwards, unless --no-reset is given.
+    """
+    try:
+        result = log_time_for_current_workspace(description=comment, reset=not no_reset)
+    except (ConfigError, WorkspaceError, JiraLogTimeError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    duration = format_duration(result.seconds_logged)
+    typer.echo(
+        f"Logged {duration} to jira:{result.issue_key} (workspace {result.workspace_index + 1})"
+    )
+    if result.tracker_reset:
+        typer.echo("Reset tracker to 0")
 
 
 @task_app.command("complete")
@@ -598,7 +351,7 @@ def task_complete(
 ) -> None:
     """Log the active task's tracked time to Jira, then free its workspace slot.
 
-    Equivalent to `et jira log-time` followed by resetting the workspace's
+    Equivalent to `et task log-time` followed by resetting the workspace's
     config entry back to a bare ET-<n> slot (clearing its name/ref/
     description), freeing it for a future `et task create`. No confirmation
     prompt.

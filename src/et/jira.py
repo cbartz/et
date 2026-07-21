@@ -1,5 +1,5 @@
 """Client for Jira Cloud's REST API, used to fetch the user's active issues
-and (for `et jira log-time`) to log work against an issue.
+and (for `et task log-time`) to log work against an issue.
 
 Talks to Jira Cloud's `/rest/api/3/search/jql` endpoint (the old
 `/rest/api/3/search` endpoint was retired by Atlassian and now returns HTTP

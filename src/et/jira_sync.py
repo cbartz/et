@@ -1,10 +1,12 @@
-"""Orchestrates `et jira get`: reconcile active Jira issues with GNOME
-workspaces and Tracker timers.
+"""Full-reshuffle Jira/workspace sync helpers (no longer wired to a CLI
+command directly, but `default_entry`/`jira_key_from_ref`/`truncate_summary`
+remain in active use by `et.task`/`et.ws`).
 
 `plan_reshuffle` and `apply_timer_changes` are pure functions with no I/O,
 so their slot-assignment math is directly unit-testable. `sync_jira_workspaces`
-(added in a later change to this file) is the only function here that
-touches the filesystem, GNOME, or the Jira API.
+is the only function here that touches the filesystem, GNOME, or the Jira
+API; it currently has no caller since the standalone `et jira get` command
+was removed.
 """
 
 from __future__ import annotations

@@ -1,14 +1,14 @@
 """Loading and saving et's configuration file (`~/.config/et/config.yaml`).
 
 Holds the "workspaces" list (name/type/ref/description per managed GNOME
-workspace, used by `et ws rename --all`, `et tracker add --all`, and
-`et jira get`), the "jira" block (Jira Cloud API credentials and query,
-also used by `et jira log-time` to log worklogs), and "max_workspaces" (the
-capacity cap shared by `tracker add --all` and `jira get`'s slot-growth
-logic). Has no Typer/CLI dependency so callers can unit test without
-touching the real filesystem (via the `ET_CONFIG_DIR` environment variable
-override).
+workspace, used by `et ws rename --all` and `et task create`), the "jira"
+block (Jira Cloud API credentials and query, also used by `et task
+log-time` to log worklogs), and "max_workspaces" (the capacity cap used by
+`et task create`'s slot-growth logic). Has no Typer/CLI dependency so
+callers can unit test without touching the real filesystem (via the
+`ET_CONFIG_DIR` environment variable override).
 """
+
 
 from __future__ import annotations
 
