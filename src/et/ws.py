@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 
 from et import tracker, workspaces
 from et.config import ConfigError, EtConfig, WorkspaceConfigEntry, load_config, save_config
-from et.jira_sync import default_entry, jira_key_from_ref
+from et.jira_ref import default_entry, jira_key_from_ref
 from et.tracker import TimerEntry, TrackerError, find_timer_for_workspace
 from et.workspaces import WorkspaceError
 

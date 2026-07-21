@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from et import tracker, workspaces
 from et.config import EtConfig, load_config
 from et.jira import JiraError, create_worklog
-from et.jira_sync import jira_key_from_ref
+from et.jira_ref import jira_key_from_ref
 from et.tracker import TrackerError
 
 # Below this, the elapsed time is almost certainly just a stray few seconds

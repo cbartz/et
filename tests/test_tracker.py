@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
-from datetime import date
 from unittest.mock import patch
 
 import pytest
@@ -13,16 +12,10 @@ from et.gnome_extensions import GnomeExtensionsError
 from et.gsettings import GSettingsError
 from et.tracker import (
     TrackerError,
-    add_tracker_for_current_workspace,
     add_tracker_for_workspace,
-    add_trackers_for_all_workspaces,
     build_new_timer,
-    dump_all_trackers,
-    dump_timer_to_file,
-    dump_tracker_for_current_workspace,
     find_timer_for_workspace,
-    reset_all_trackers,
-    reset_tracker_for_current_workspace,
+    format_duration,
 )
 
 SETTINGS_SENTINEL = {"id": "settings", "totalTimeSelected": True}
@@ -87,291 +80,35 @@ def test_add_tracker_for_workspace_is_noop_when_timer_already_exists(mock_read, 
     mock_write.assert_not_called()
 
 
-@patch("et.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_for_current_workspace_delegates_to_explicit_index_helper(
-    mock_get_index, mock_add_for_workspace
-):
-    assert add_tracker_for_current_workspace() == (0, "ET-1", True)
-    mock_add_for_workspace.assert_called_once_with(0)
-
-
-@patch("et.tracker.reload_around", return_value=nullcontext())
-@patch("et.tracker.gsettings.write_string_array")
-@patch("et.tracker.gsettings.read_string_array", return_value=[])
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_creates_timer_named_with_et_prefix(
-    mock_get_index, mock_read, mock_write, mock_reload
-):
-    index, name, created = add_tracker_for_current_workspace()
-    assert (index, name, created) == (0, "ET-1", True)
-
-    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
-    assert written_entries == [build_new_timer(0, "ET-1") | {"id": written_entries[0]["id"]}]
-
-
-@patch("et.tracker.reload_around", return_value=nullcontext())
-@patch("et.tracker.gsettings.write_string_array")
-@patch("et.tracker.gsettings.read_string_array", return_value=[])
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=3)
-def test_add_tracker_names_timer_using_one_indexed_workspace_number(
-    mock_get_index, mock_read, mock_write, mock_reload
-):
-    index, name, created = add_tracker_for_current_workspace()
-    assert (index, name, created) == (3, "ET-4", True)
-    mock_write.assert_called_once()
-
-
-@patch("et.tracker.gsettings.write_string_array")
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[
-        json.dumps(SETTINGS_SENTINEL),
-        json.dumps({"id": "existing", "name": "mails", "timeElapsed": 42, "running": False,
-                     "selected": False, "workspaceId": 0}),
-    ],
-)
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_is_noop_when_timer_already_exists(
-    mock_get_index, mock_read, mock_write
-):
-    index, name, created = add_tracker_for_current_workspace()
-    assert (index, name, created) == (0, "mails", False)
-    mock_write.assert_not_called()
-
-
 @patch("et.tracker.reload_around", return_value=nullcontext())
 @patch("et.tracker.gsettings.write_string_array")
 @patch(
     "et.tracker.gsettings.read_string_array",
     return_value=[json.dumps(SETTINGS_SENTINEL)],
 )
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_preserves_sentinel_entry(
-    mock_get_index, mock_read, mock_write, mock_reload
-):
-    add_tracker_for_current_workspace()
+def test_add_tracker_preserves_sentinel_entry(mock_read, mock_write, mock_reload):
+    add_tracker_for_workspace(0)
     written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
     assert written_entries[0] == SETTINGS_SENTINEL
     assert len(written_entries) == 2
 
 
 @patch("et.tracker.gsettings.read_string_array", side_effect=GSettingsError("no schema"))
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_wraps_gsettings_error(mock_get_index, mock_read):
+def test_add_tracker_wraps_gsettings_error(mock_read):
     with pytest.raises(TrackerError, match="Tracker GNOME extension"):
-        add_tracker_for_current_workspace()
+        add_tracker_for_workspace(0)
 
 
 @patch("et.tracker.reload_around", side_effect=GnomeExtensionsError("could not disable"))
 @patch("et.tracker.gsettings.write_string_array")
 @patch("et.tracker.gsettings.read_string_array", return_value=[])
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_add_tracker_wraps_gnome_extensions_error(
-    mock_get_index, mock_read, mock_write, mock_reload
-):
+def test_add_tracker_wraps_gnome_extensions_error(mock_read, mock_write, mock_reload):
     with pytest.raises(TrackerError, match="reload the Tracker extension"):
-        add_tracker_for_current_workspace()
+        add_tracker_for_workspace(0)
     mock_write.assert_not_called()
 
 
-@patch("et.tracker.reload_around", return_value=nullcontext())
-@patch("et.tracker.gsettings.write_string_array")
-@patch("et.tracker.gsettings.read_string_array", return_value=[])
-@patch("et.tracker.workspaces.configure_static_workspace_count")
-def test_add_all_configures_static_workspaces_and_creates_ten_timers(
-    mock_configure, mock_read, mock_write, mock_reload
-):
-    results = add_trackers_for_all_workspaces()
-
-    mock_configure.assert_called_once_with(10)
-    assert [r[:2] for r in results] == [(i, f"ET-{i + 1}") for i in range(10)]
-    assert all(created for (_, _, created) in results)
-
-    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
-    assert [entry["name"] for entry in written_entries] == [f"ET-{i + 1}" for i in range(10)]
-    assert all(entry["workspaceId"] == i for i, entry in enumerate(written_entries))
-
-
-@patch("et.tracker.reload_around", return_value=nullcontext())
-@patch("et.tracker.gsettings.write_string_array")
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[json.dumps({"id": "a", "name": "ET-1", "workspaceId": 0})],
-)
-@patch("et.tracker.workspaces.configure_static_workspace_count")
-def test_add_all_skips_workspaces_that_already_have_a_timer(
-    mock_configure, mock_read, mock_write, mock_reload
-):
-    results = add_trackers_for_all_workspaces(count=2)
-
-    assert results == [(0, "ET-1", False), (1, "ET-2", True)]
-    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
-    assert [entry["name"] for entry in written_entries] == ["ET-1", "ET-2"]
-
-
-@patch("et.tracker.reload_around", return_value=nullcontext())
-@patch("et.tracker.gsettings.write_string_array")
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[
-        json.dumps({"id": "a", "name": "ET-1", "workspaceId": 0}),
-        json.dumps({"id": "b", "name": "ET-2", "workspaceId": 1}),
-    ],
-)
-@patch("et.tracker.workspaces.configure_static_workspace_count")
-def test_add_all_writes_nothing_when_every_timer_already_exists(
-    mock_configure, mock_read, mock_write, mock_reload
-):
-    results = add_trackers_for_all_workspaces(count=2)
-
-    assert results == [(0, "ET-1", False), (1, "ET-2", False)]
-    mock_write.assert_not_called()
-
-
-@patch("et.tracker.reload_around", return_value=nullcontext())
-@patch("et.tracker.gsettings.write_string_array")
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[
-        json.dumps(SETTINGS_SENTINEL),
-        json.dumps(
-            {"id": "a", "name": "ET-1", "workspaceId": 0, "timeElapsed": 125, "running": True}
-        ),
-        json.dumps({"id": "b", "name": "Test 1", "workspaceId": 1, "timeElapsed": 999}),
-    ],
-)
-def test_reset_all_only_touches_et_prefixed_timers(mock_read, mock_write, mock_reload):
-    reset_names = reset_all_trackers()
-
-    assert reset_names == ["ET-1"]
-    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
-    et_entry = next(e for e in written_entries if e.get("name") == "ET-1")
-    other_entry = next(e for e in written_entries if e.get("name") == "Test 1")
-    assert et_entry["timeElapsed"] == 0
-    assert et_entry["running"] is False
-    assert other_entry["timeElapsed"] == 999
-
-
-@patch("et.tracker.gsettings.write_string_array")
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[json.dumps(SETTINGS_SENTINEL)],
-)
-def test_reset_all_is_noop_when_no_et_timers_exist(mock_read, mock_write):
-    assert reset_all_trackers() == []
-    mock_write.assert_not_called()
-
-
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[
-        json.dumps(SETTINGS_SENTINEL),
-        json.dumps({"id": "a", "name": "ET-1", "workspaceId": 0, "timeElapsed": 3725}),
-        json.dumps({"id": "b", "name": "Test 1", "workspaceId": 1, "timeElapsed": 999}),
-    ],
-)
-def test_dump_all_writes_one_file_per_et_timer(mock_read, tmp_path):
-    written = dump_all_trackers(base_dir=tmp_path)
-
-    assert len(written) == 1
-    name, et_file, duration = written[0]
-    assert name == "ET-1"
-    assert duration == "1h 2m 5s"
-    assert et_file.name == "ET-1.txt"
-    assert et_file.parent.name == date.today().isoformat()
-    assert et_file.read_text() == "3725\n1h 2m 5s\n"
-
-
-@patch("et.tracker.gsettings.read_string_array", return_value=[json.dumps(SETTINGS_SENTINEL)])
-def test_dump_all_is_noop_when_no_et_timers_exist(mock_read, tmp_path):
-    assert dump_all_trackers(base_dir=tmp_path) == []
-    assert not (tmp_path / date.today().isoformat()).exists()
-
-
-@patch("et.tracker.reload_around", return_value=nullcontext())
-@patch("et.tracker.gsettings.write_string_array")
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[
-        json.dumps(SETTINGS_SENTINEL),
-        json.dumps(
-            {"id": "a", "name": "ET-1", "workspaceId": 0, "timeElapsed": 125, "running": True}
-        ),
-        json.dumps({"id": "b", "name": "ET-2", "workspaceId": 1, "timeElapsed": 999}),
-    ],
-)
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_reset_current_workspace_resets_only_its_timer(
-    mock_index, mock_read, mock_write, mock_reload
-):
-    index, name = reset_tracker_for_current_workspace()
-
-    assert (index, name) == (0, "ET-1")
-    written = [json.loads(raw) for raw in mock_write.call_args[0][2]]
-    reset_entry = next(e for e in written if e.get("name") == "ET-1")
-    other_entry = next(e for e in written if e.get("name") == "ET-2")
-    assert reset_entry["timeElapsed"] == 0
-    assert reset_entry["running"] is False
-    assert other_entry["timeElapsed"] == 999
-
-
-@patch("et.tracker.gsettings.write_string_array")
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[json.dumps({"id": "b", "name": "Manual", "workspaceId": 0})],
-)
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
-def test_reset_current_workspace_is_noop_without_et_timer(mock_index, mock_read, mock_write):
-    index, name = reset_tracker_for_current_workspace()
-
-    assert (index, name) == (0, None)
-    mock_write.assert_not_called()
-
-
-@patch(
-    "et.tracker.gsettings.read_string_array",
-    return_value=[
-        json.dumps(SETTINGS_SENTINEL),
-        json.dumps({"id": "a", "name": "ET-2", "workspaceId": 1, "timeElapsed": 3725}),
-    ],
-)
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=1)
-def test_dump_current_workspace_writes_its_timer(mock_index, mock_read, tmp_path):
-    index, path, duration = dump_tracker_for_current_workspace(base_dir=tmp_path)
-
-    assert index == 1
-    assert path is not None
-    assert duration == "1h 2m 5s"
-    assert path.name == "ET-2.txt"
-    assert path.parent.name == date.today().isoformat()
-    assert path.read_text() == "3725\n1h 2m 5s\n"
-
-
-@patch("et.tracker.gsettings.read_string_array", return_value=[json.dumps(SETTINGS_SENTINEL)])
-@patch("et.tracker.workspaces.get_active_workspace_index", return_value=3)
-def test_dump_current_workspace_is_noop_without_et_timer(mock_index, mock_read, tmp_path):
-    index, path, duration = dump_tracker_for_current_workspace(base_dir=tmp_path)
-
-    assert (index, path, duration) == (3, None, None)
-    assert not (tmp_path / date.today().isoformat()).exists()
-
-
-def test_dump_timer_to_file_writes_seconds_and_duration(tmp_path):
-    entry = {"id": "a", "name": "ET-1", "timeElapsed": 3725}
-    path = tmp_path / "nested" / "ET-1.txt"
-
-    duration = dump_timer_to_file(entry, path)
-
-    assert duration == "1h 2m 5s"
-    assert path.read_text() == "3725\n1h 2m 5s\n"
-
-
-def test_dump_timer_to_file_treats_missing_elapsed_as_zero(tmp_path):
-    entry = {"id": "a", "name": "ET-1"}
-    path = tmp_path / "ET-1.txt"
-
-    duration = dump_timer_to_file(entry, path)
-
-    assert duration == "0h 0m 0s"
-    assert path.read_text() == "0\n0h 0m 0s\n"
+def test_format_duration_renders_hours_minutes_seconds():
+    assert format_duration(3725) == "1h 2m 5s"
+    assert format_duration(0) == "0h 0m 0s"
+    assert format_duration(59.9) == "0h 0m 59s"

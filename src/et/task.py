@@ -1,6 +1,6 @@
 """Orchestrates the `et jira` command group: a friendlier, task-centric
 layer on top of the Tracker and Jira integrations (`et.tracker`,
-`et.jira`, `et.jira_sync`, `et.jira_time`), plus `et ws`.
+`et.jira`, `et.jira_ref`, `et.jira_time`), plus `et ws`.
 
 `et jira start` allocates a free workspace slot (growing the configured
 list, and bumping `max_workspaces` itself if the current cap is already
@@ -37,7 +37,7 @@ from et.jira import (
     fetch_transitions,
     transition_issue,
 )
-from et.jira_sync import JIRA_REF_PREFIX, default_entry, jira_key_from_ref, truncate_summary
+from et.jira_ref import JIRA_REF_PREFIX, default_entry, jira_key_from_ref, truncate_summary
 from et.jira_time import LogTimeResult, log_time_for_current_workspace
 from et.tracker import TrackerError
 from et.workspaces import WorkspaceError

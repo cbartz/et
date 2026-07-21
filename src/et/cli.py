@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import typer
 
 from et.config import ConfigError, load_config, load_workspace_names
-from et.jira_sync import jira_key_from_ref
+from et.jira_ref import jira_key_from_ref
 from et.jira_time import JiraLogTimeError, log_time_for_current_workspace
 from et.task import (
     TaskError,
