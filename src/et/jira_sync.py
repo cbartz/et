@@ -220,6 +220,37 @@ def _count_eligible(entries: list[WorkspaceConfigEntry]) -> int:
     return sum(1 for entry in entries if entry.type != "static")
 
 
+def preview_reshuffle(config: EtConfig, issues: list[JiraIssue]) -> ReshuffleOutcome:
+    """Compute the workspace reshuffle `sync_jira_workspaces` would apply (pure, no I/O).
+
+    Mirrors the slot bookkeeping `sync_jira_workspaces` performs before
+    `plan_reshuffle` — clearing every non-static workspace whose tracked Jira
+    issue is no longer active, then growing the list (up to
+    `config.max_workspaces`) to fit the active issues — so callers can show,
+    per issue, what will happen to its workspace *before* asking to proceed.
+
+    This is a best-effort preview: it assumes any now-inactive tracked
+    workspaces will be deleted (as they are with `--no-prompt`, or when the
+    user confirms each deletion), so declined deletions can make the eventual
+    arrangement differ.
+    """
+    active_keys = {candidate.key for candidate in issues}
+    workspaces_list = list(config.workspaces)
+    for slot, entry in enumerate(workspaces_list):
+        key = jira_key_from_ref(entry.ref)
+        if key is None or entry.type == "static" or key in active_keys:
+            continue
+        workspaces_list[slot] = _default_entry(slot, entry.type)
+
+    while (
+        _count_eligible(workspaces_list) < len(issues)
+        and len(workspaces_list) < config.max_workspaces
+    ):
+        workspaces_list.append(_default_entry(len(workspaces_list), "dynamic"))
+
+    return plan_reshuffle(workspaces_list, issues)
+
+
 def sync_jira_workspaces(
     *,
     confirm_plan: Callable[[list[JiraIssue]], bool] = lambda issues: True,

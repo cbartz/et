@@ -234,3 +234,32 @@ def test_jira_get_reports_kept_workspaces(mock_sync, mock_load_config):
 
     assert result.exit_code == 0
     assert "Kept workspace 2 on jira:PROJ-9" in result.stdout
+
+
+@patch("et.cli.load_config")
+@patch("et.cli.sync_jira_workspaces")
+def test_jira_get_annotates_each_issue_with_its_workspace_action(mock_sync, mock_load_config):
+    config = _config(
+        workspaces=[
+            WorkspaceConfigEntry(name="Keep", type="dynamic", ref="jira:KEEP"),
+            WorkspaceConfigEntry(name="Move", type="dynamic", ref="jira:MOVE"),
+        ]
+    )
+    mock_load_config.return_value = config
+    issues = [
+        JiraIssue(key="KEEP", summary="Keep summary", priority="High"),
+        JiraIssue(key="NEW", summary="New summary", priority="Medium"),
+        JiraIssue(key="MOVE", summary="Move summary", priority="Low"),
+    ]
+
+    def fake_sync(confirm_plan, confirm_delete):
+        confirm_plan(issues)
+        return _empty_result()
+
+    mock_sync.side_effect = fake_sync
+
+    result = runner.invoke(app, ["jira", "get"], input="n\n")
+
+    assert "KEEP [High] Keep summary  (ws unchanged (1))" in result.stdout
+    assert "NEW [Medium] New summary  (ws created (2))" in result.stdout
+    assert "MOVE [Low] Move summary  (ws move (2 -> 3))" in result.stdout

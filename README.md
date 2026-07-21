@@ -87,9 +87,12 @@ et jira get --no-prompt     # skip confirmations (auto-confirm deletions)
 
 `et jira get` renames/describes your non-`static` workspaces after your
 active issues (highest priority first), moving Tracker timers along with each
-issue when its slot changes. Workspaces whose tracked issue is no longer
-active are reset back to a plain `ET-<n>` slot after confirmation (their timer
-is first dumped to `~/timers/by-id/jira-<KEY>.txt`, then reset).
+issue when its slot changes. The confirmation prompt annotates each issue with
+what will happen to its workspace — `ws unchanged (N)`, `ws move (OLD -> NEW)`,
+`ws created (N)`, or `no free workspace slot` — using 1-based workspace
+indices. Workspaces whose tracked issue is no longer active are reset back to a
+plain `ET-<n>` slot after confirmation (their timer is first dumped to
+`~/timers/by-id/jira-<KEY>.txt`, then reset).
 
 ## Configuration
 

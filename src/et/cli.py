@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import typer
 
 from et.config import ConfigError, get_max_workspaces, load_config, load_workspace_names
-from et.jira_sync import JiraSyncError, jira_key_from_ref, sync_jira_workspaces
+from et.jira_sync import JiraSyncError, jira_key_from_ref, preview_reshuffle, sync_jira_workspaces
 from et.tracker import (
     TrackerError,
     add_tracker_for_current_workspace,
@@ -27,6 +27,7 @@ from et.workspaces import (
 )
 
 if TYPE_CHECKING:
+    from et.config import EtConfig
     from et.jira import JiraIssue
 
 
@@ -39,6 +40,32 @@ def _hyperlink(text: str, url: str) -> str:
     if not sys.stdout.isatty():
         return text
     return f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\"
+
+
+def _preview_workspace_actions(
+    config: EtConfig | None, issues: list[JiraIssue]
+) -> dict[str, str]:
+    """Map each issue key to a human-readable note about its workspace change.
+
+    Notes are 1-indexed to match the rest of the CLI's workspace numbering:
+    "ws unchanged (N)", "ws move (OLD -> NEW)", "ws created (N)", and
+    "no free workspace slot" for issues that won't fit. Returns an empty map
+    when `config` is unavailable (so annotations are simply omitted).
+    """
+    if config is None:
+        return {}
+
+    outcome = preview_reshuffle(config, issues)
+    actions: dict[str, str] = {}
+    for slot, key in outcome.kept:
+        actions[key] = f"ws unchanged ({slot + 1})"
+    for slot, key in outcome.assigned:
+        actions[key] = f"ws created ({slot + 1})"
+    for key, old_slot, new_slot in outcome.moved:
+        actions[key] = f"ws move ({old_slot + 1} -> {new_slot + 1})"
+    for key in outcome.skipped:
+        actions[key] = "no free workspace slot"
+    return actions
 
 
 app = typer.Typer(
@@ -273,16 +300,20 @@ def jira_get(
 
         try:
             config = load_config()
-            base_url = config.jira.base_url.rstrip("/") if config.jira else ""
         except ConfigError:
-            base_url = ""
+            config = None
+        base_url = config.jira.base_url.rstrip("/") if config and config.jira else ""
+
+        workspace_actions = _preview_workspace_actions(config, issues)
 
         typer.echo("Active issues, highest priority first:")
         for issue in issues:
             key_display = (
                 _hyperlink(issue.key, f"{base_url}/browse/{issue.key}") if base_url else issue.key
             )
-            typer.echo(f"  {key_display} [{issue.priority}] {issue.summary}")
+            action = workspace_actions.get(issue.key)
+            suffix = f"  ({action})" if action else ""
+            typer.echo(f"  {key_display} [{issue.priority}] {issue.summary}{suffix}")
         return typer.confirm("Proceed with syncing these onto your workspaces?")
 
     def confirm_delete(slot: int, name: str, key: str) -> bool:
