@@ -219,6 +219,11 @@ def _print_task_created(result: TaskCreateResult) -> None:
     if not result.timer_created:
         typer.echo(f"Tracker already existed for workspace {result.workspace_index + 1}")
     typer.echo(f"Switched to workspace {result.workspace_index + 1}")
+    if not result.window_moved:
+        typer.echo(
+            "Note: could not move this terminal window to the new workspace "
+            "(unsupported here, e.g. under Wayland)."
+        )
 
 
 @jira_app.command("start")

@@ -58,6 +58,7 @@ class TaskCreateResult:
     name: str
     ref: str | None
     timer_created: bool
+    window_moved: bool
 
 
 @dataclass(frozen=True)
@@ -86,8 +87,12 @@ def create_task_workspace(
     reached, so `et jira start` never fails for lack of room. Saves the
     updated config, creates the slot's Tracker timer, renames the GNOME
     workspaces to match, switches the active GNOME workspace to the new
-    slot, and moves the currently focused window (typically the terminal
-    the command was run from) there too.
+    slot, and best-effort moves the currently focused window (typically
+    the terminal the command was run from) there too — this last step is
+    skipped without failing the whole command if unsupported (e.g. for
+    native Wayland clients, which have no addressable X11 window for
+    `wmctrl` to move); `TaskCreateResult.window_moved` reports whether it
+    worked.
 
     Raises `ConfigError` if the config file is missing/malformed, and
     `WorkspaceError`/`TrackerError` (via `TaskError`) if the underlying
@@ -127,11 +132,27 @@ def create_task_workspace(
         )
         workspaces.rename_all_workspaces([entry.name for entry in workspaces_list])
         workspaces.switch_to_workspace(slot)
-        workspaces.move_active_window_to_workspace(slot)
     except (WorkspaceError, TrackerError, ConfigError) as exc:
         raise TaskError(str(exc)) from exc
 
-    return TaskCreateResult(workspace_index=slot, name=name, ref=ref, timer_created=timer_created)
+    # Best-effort: moving the focused window across workspaces requires an
+    # addressable X11 window, which native Wayland clients (e.g. many
+    # terminal emulators under GNOME/Wayland) don't have. Don't fail task
+    # creation — which has already fully succeeded at this point — just
+    # because this cosmetic step isn't supported in the current session.
+    try:
+        workspaces.move_active_window_to_workspace(slot)
+        window_moved = True
+    except WorkspaceError:
+        window_moved = False
+
+    return TaskCreateResult(
+        workspace_index=slot,
+        name=name,
+        ref=ref,
+        timer_created=timer_created,
+        window_moved=window_moved,
+    )
 
 
 

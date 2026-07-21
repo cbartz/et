@@ -246,7 +246,7 @@ def test_ws_delete_force_passes_flag_through(mock_delete):
 @patch("et.cli.create_task_from_jira")
 def test_jira_start_lists_issues_and_creates_from_selection(mock_create_from_jira):
     mock_create_from_jira.return_value = TaskCreateResult(
-        workspace_index=2, name="ISD-2", ref="jira:ISD-2", timer_created=True
+        workspace_index=2, name="ISD-2", ref="jira:ISD-2", timer_created=True, window_moved=True
     )
 
     def fake_create_from_jira(select_issue, confirm_transition):
@@ -266,6 +266,30 @@ def test_jira_start_lists_issues_and_creates_from_selection(mock_create_from_jir
     assert "Active issues not yet linked to a workspace:" in result.stdout
     assert "ISD-2" in result.stdout
     assert "Created workspace 3: 'ISD-2' (linked to ISD-2)" in result.stdout
+    assert "Note: could not move this terminal window" not in result.stdout
+
+
+@patch("et.cli.create_task_from_jira")
+def test_jira_start_notes_when_window_could_not_be_moved(mock_create_from_jira):
+    mock_create_from_jira.return_value = TaskCreateResult(
+        workspace_index=2, name="ISD-2", ref="jira:ISD-2", timer_created=True, window_moved=False
+    )
+
+    def fake_create_from_jira(select_issue, confirm_transition):
+        del confirm_transition
+        issues = [
+            JiraIssue(key="ISD-2", summary="Second issue", priority="High", status="In Progress")
+        ]
+        with patch("sys.stdout.isatty", return_value=False):
+            select_issue(issues)
+        return mock_create_from_jira.return_value
+
+    mock_create_from_jira.side_effect = fake_create_from_jira
+
+    result = runner.invoke(app, ["jira", "start"], input="1\n")
+
+    assert result.exit_code == 0
+    assert "Note: could not move this terminal window to the new workspace" in result.stdout
 
 
 @patch("et.cli.create_task_from_jira")

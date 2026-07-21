@@ -82,6 +82,32 @@ def test_create_task_workspace_uses_first_free_slot(
     mock_rename_all.assert_called_once_with(["ET-1", "my-task"])
     mock_switch.assert_called_once_with(1)
     mock_move.assert_called_once_with(1)
+    assert result.window_moved is True
+
+
+@patch("et.task.workspaces.move_active_window_to_workspace")
+@patch("et.task.workspaces.switch_to_workspace")
+@patch("et.task.workspaces.rename_all_workspaces")
+@patch("et.task.save_config")
+@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
+@patch("et.task.workspaces.configure_static_workspace_count")
+@patch("et.task.load_config")
+def test_create_task_workspace_succeeds_when_window_move_unsupported(
+    mock_load_config,
+    _mock_configure_count,
+    _mock_add_tracker,
+    _mock_save_config,
+    _mock_rename_all,
+    mock_switch,
+    mock_move,
+):
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ET-1")])
+    mock_move.side_effect = WorkspaceError("wmctrl -r :ACTIVE: -t 0 failed: ")
+
+    result = create_task_workspace("my-task")
+
+    assert result.window_moved is False
+    mock_switch.assert_called_once_with(0)
 
 
 @patch("et.task.workspaces.move_active_window_to_workspace")
