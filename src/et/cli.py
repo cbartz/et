@@ -23,7 +23,9 @@ from et.tracker import (
     add_trackers_for_all_workspaces,
     dump_all_trackers,
     dump_tracker_for_current_workspace,
+    find_timer_for_workspace,
     format_duration,
+    load_timers,
     reset_all_trackers,
     reset_tracker_for_current_workspace,
 )
@@ -143,16 +145,8 @@ def rename(
     typer.echo(f"Renamed workspace {index + 1} to '{new_name}'")
 
 
-@ws_app.command("info")
-def info() -> None:
-    """Show the Jira issue (description + link) linked to the active workspace, if any."""
-    try:
-        index = get_active_workspace_index()
-        config = load_config()
-    except (ConfigError, WorkspaceError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
+def _print_workspace_jira_info(index: int, config: EtConfig) -> None:
+    """Print the Jira issue (description + link) linked to workspace `index`, if any."""
     entry = config.workspaces[index] if index < len(config.workspaces) else None
     key = jira_key_from_ref(entry.ref) if entry else None
 
@@ -168,6 +162,33 @@ def info() -> None:
         typer.echo(_hyperlink(f"jira:{key}", f"{base_url}/browse/{key}"))
     else:
         typer.echo(f"jira:{key}")
+
+
+def _print_workspace_time_spent(index: int) -> None:
+    """Print the elapsed time of the ET-<n> tracker bound to workspace `index`, if any."""
+    entries = load_timers()
+    timer = find_timer_for_workspace(entries, index)
+    if timer is None:
+        typer.echo("No tracker for this workspace.")
+        return
+
+    elapsed = timer.get("timeElapsed", 0)
+    seconds = elapsed if isinstance(elapsed, (int, float)) else 0
+    running = " (running)" if timer.get("running") else ""
+    typer.echo(f"Time spent: {format_duration(seconds)}{running}")
+
+
+@ws_app.command("info")
+def info() -> None:
+    """Show the Jira issue (description + link) linked to the active workspace, if any."""
+    try:
+        index = get_active_workspace_index()
+        config = load_config()
+    except (ConfigError, WorkspaceError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    _print_workspace_jira_info(index, config)
 
 
 @tracker_app.command("add")
@@ -406,8 +427,25 @@ def _print_task_created(result: TaskCreateResult) -> None:
 
 @task_app.command("info")
 def task_info() -> None:
-    """Show the Jira issue linked to the active task's workspace (same as `et ws info`)."""
-    info()
+    """Show the Jira issue and tracked time for the active task's workspace.
+
+    Same as `et ws info`, plus the elapsed time of the ET-<n> Tracker timer
+    bound to the active workspace (if any).
+    """
+    try:
+        index = get_active_workspace_index()
+        config = load_config()
+    except (ConfigError, WorkspaceError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    _print_workspace_jira_info(index, config)
+
+    try:
+        _print_workspace_time_spent(index)
+    except TrackerError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
 
 
 @task_app.command("create")

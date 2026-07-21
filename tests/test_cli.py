@@ -13,6 +13,7 @@ from et.jira import JiraIssue
 from et.jira_sync import JiraSyncResult
 from et.jira_time import JiraLogTimeError, LogTimeResult
 from et.task import TaskCompleteResult, TaskCreateResult, TaskError
+from et.tracker import TrackerError
 
 runner = CliRunner()
 
@@ -310,16 +311,66 @@ def test_jira_log_time_reports_error(mock_log_time):
 # --- et task -----------------------------------------------------------------
 
 
+@patch("et.cli.load_timers")
 @patch("et.cli.get_active_workspace_index")
 @patch("et.cli.load_config")
-def test_task_info_delegates_to_ws_info(mock_load_config, mock_index):
+def test_task_info_delegates_to_ws_info(mock_load_config, mock_index, mock_load_timers):
     mock_index.return_value = 0
     mock_load_config.return_value = _config([WorkspaceConfigEntry(name="misc")])
+    mock_load_timers.return_value = []
 
     result = runner.invoke(app, ["task", "info"])
 
     assert result.exit_code == 0
     assert "No Jira issue linked to this workspace." in result.stdout
+    assert "No tracker for this workspace." in result.stdout
+
+
+@patch("et.cli.load_timers")
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_task_info_shows_elapsed_time_for_bound_tracker(
+    mock_load_config, mock_index, mock_load_timers
+):
+    mock_index.return_value = 1
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="misc"),
+            WorkspaceConfigEntry(
+                name="ISD-321", ref="jira:ISD-321", description="Fix the thing"
+            ),
+        ]
+    )
+    mock_load_timers.return_value = [
+        {
+            "id": "t1",
+            "name": "ET-2",
+            "timeElapsed": 4320,
+            "running": True,
+            "selected": False,
+            "workspaceId": 1,
+        }
+    ]
+
+    with patch("sys.stdout.isatty", return_value=False):
+        result = runner.invoke(app, ["task", "info"])
+
+    assert result.exit_code == 0
+    assert "jira:ISD-321" in result.stdout
+    assert "Time spent: 1h 12m 0s (running)" in result.stdout
+
+
+@patch("et.cli.load_timers", side_effect=TrackerError("no schema"))
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_task_info_reports_tracker_error(mock_load_config, mock_index, _mock_load_timers):
+    mock_index.return_value = 0
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="misc")])
+
+    result = runner.invoke(app, ["task", "info"])
+
+    assert result.exit_code == 1
+    assert "Error: no schema" in result.output
 
 
 @patch("et.cli.create_task_workspace")

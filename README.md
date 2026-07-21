@@ -122,13 +122,18 @@ time — it doesn't replace `ws`/`tracker`/`jira`, which keep working exactly
 as before.
 
 ```bash
-et task info                                # same as `et ws info`
+et task info                                # same as `et ws info`, plus time spent
 et task create                              # prompts for a name/description
 et task create isd-321 -d "Fix login bug"   # or give them directly
 et task create --from-jira                  # pick from your active Jira issues
 et task log-time                            # same as `et jira log-time`
 et task complete                            # log time, then free the workspace
 ```
+
+`et task info` shows the same Jira issue details as `et ws info`, plus the
+elapsed time of the `ET-<n>` Tracker timer bound to the active workspace
+(e.g. `Time spent: 1h 12m 0s`, with `(running)` appended if the timer is
+currently running).
 
 `et task create` allocates the first free (non-`static`, unlinked) workspace
 slot — growing the configured workspace list up to `max_workspaces` if none
