@@ -53,6 +53,19 @@ def get_active_workspace_index() -> int:
     raise WorkspaceError("no active workspace found in `wmctrl -d` output")
 
 
+def switch_to_workspace(index: int) -> None:
+    """Switch GNOME to the workspace at 0-based `index`."""
+    _require_binary("wmctrl")
+    result = subprocess.run(
+        ["wmctrl", "-s", str(index)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise WorkspaceError(f"wmctrl -s {index} failed: {result.stderr.strip()}")
+
+
 def get_workspace_names() -> list[str]:
     """Return the current list of GNOME workspace names."""
     try:

@@ -16,6 +16,10 @@ workspaces around your active Jira issues.
   and Tracker timers to match, highest priority first.
 - **`et jira log-time`** — log the active workspace's tracked time to its
   linked Jira issue.
+- **`et task [create|info|log-time|complete]`** — a friendlier, task-centric
+  layer over the above: create a workspace+timer for a task (optionally
+  picked straight from your active Jira issues), and complete it by logging
+  its time and freeing the slot.
 
 ## Requirements
 
@@ -110,6 +114,32 @@ created this way still show up in Tempo timesheets when Tempo is configured
 to sync native Jira worklogs). At least a minute of elapsed time is
 required. On success the tracker is reset to 0, unless `--no-reset` is
 given.
+
+### Tasks
+
+`et task` wraps the commands above into a single lifecycle for one task at a
+time — it doesn't replace `ws`/`tracker`/`jira`, which keep working exactly
+as before.
+
+```bash
+et task info                                # same as `et ws info`
+et task create                              # prompts for a name/description
+et task create isd-321 -d "Fix login bug"   # or give them directly
+et task create --from-jira                  # pick from your active Jira issues
+et task log-time                            # same as `et jira log-time`
+et task complete                            # log time, then free the workspace
+```
+
+`et task create` allocates the first free (non-`static`, unlinked) workspace
+slot — growing the configured workspace list up to `max_workspaces` if none
+is free, same as `et jira get` — creates its `ET-<n>` Tracker timer, and
+switches GNOME to it. `--from-jira` lists your active Jira issues that
+aren't already linked to a workspace, lets you pick one, and links the new
+workspace to it (same as `et jira get` would).
+
+`et task complete` logs the active workspace's tracked time to Jira (like
+`et jira log-time`, no confirmation prompt) and then resets that workspace
+back to a bare `ET-<n>` slot, freeing it for a future `et task create`.
 
 ## Configuration
 

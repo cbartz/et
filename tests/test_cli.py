@@ -12,6 +12,7 @@ from et.config import EtConfig, JiraConfig, WorkspaceConfigEntry
 from et.jira import JiraIssue
 from et.jira_sync import JiraSyncResult
 from et.jira_time import JiraLogTimeError, LogTimeResult
+from et.task import TaskCompleteResult, TaskCreateResult, TaskError
 
 runner = CliRunner()
 
@@ -301,6 +302,152 @@ def test_jira_log_time_reports_error(mock_log_time):
     mock_log_time.side_effect = JiraLogTimeError("no Jira issue linked to workspace 1")
 
     result = runner.invoke(app, ["jira", "log-time"])
+
+    assert result.exit_code == 1
+    assert "Error: no Jira issue linked to workspace 1" in result.output
+
+
+# --- et task -----------------------------------------------------------------
+
+
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_task_info_delegates_to_ws_info(mock_load_config, mock_index):
+    mock_index.return_value = 0
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="misc")])
+
+    result = runner.invoke(app, ["task", "info"])
+
+    assert result.exit_code == 0
+    assert "No Jira issue linked to this workspace." in result.stdout
+
+
+@patch("et.cli.create_task_workspace")
+def test_task_create_with_name_argument_skips_prompts(mock_create):
+    mock_create.return_value = TaskCreateResult(
+        workspace_index=1, name="my-task", ref=None, timer_created=True
+    )
+
+    result = runner.invoke(app, ["task", "create", "my-task", "--description", "doing stuff"])
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with("my-task", description="doing stuff")
+    assert "Created workspace 2: 'my-task'" in result.stdout
+    assert "Switched to workspace 2" in result.stdout
+
+
+@patch("et.cli.create_task_workspace")
+def test_task_create_prompts_for_name_and_description_when_omitted(mock_create):
+    mock_create.return_value = TaskCreateResult(
+        workspace_index=0, name="typed-name", ref=None, timer_created=True
+    )
+
+    result = runner.invoke(app, ["task", "create"], input="typed-name\ntyped-description\n")
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with("typed-name", description="typed-description")
+
+
+@patch("et.cli.create_task_workspace")
+def test_task_create_reports_error(mock_create):
+    mock_create.side_effect = TaskError("no free workspace slot available")
+
+    result = runner.invoke(app, ["task", "create", "my-task", "--description", "d"])
+
+    assert result.exit_code == 1
+    assert "Error: no free workspace slot available" in result.output
+
+
+def test_task_create_rejects_name_together_with_from_jira():
+    result = runner.invoke(app, ["task", "create", "my-task", "--from-jira"])
+
+    assert result.exit_code == 1
+    assert "must not be given together with --from-jira" in result.output
+
+
+@patch("et.cli.create_task_from_jira")
+@patch("et.cli.load_config")
+def test_task_create_from_jira_lists_issues_and_creates_from_selection(
+    mock_load_config, mock_create_from_jira
+):
+    mock_load_config.return_value = _config()
+    mock_create_from_jira.return_value = TaskCreateResult(
+        workspace_index=2, name="ISD-2", ref="jira:ISD-2", timer_created=True
+    )
+
+    captured_select_issue = {}
+
+    def fake_create_from_jira(select_issue):
+        captured_select_issue["fn"] = select_issue
+        issues = [JiraIssue(key="ISD-2", summary="Second issue", priority="High")]
+        with patch("sys.stdout.isatty", return_value=False):
+            select_issue(issues)
+        return mock_create_from_jira.return_value
+
+    mock_create_from_jira.side_effect = fake_create_from_jira
+
+    result = runner.invoke(app, ["task", "create", "--from-jira"], input="1\n")
+
+    assert result.exit_code == 0
+    assert "Active issues not yet linked to a workspace:" in result.stdout
+    assert "ISD-2" in result.stdout
+    assert "Created workspace 3: 'ISD-2' (linked to ISD-2)" in result.stdout
+
+
+@patch("et.cli.create_task_from_jira")
+def test_task_create_from_jira_cancelled_returns_none(mock_create_from_jira):
+    mock_create_from_jira.return_value = None
+
+    result = runner.invoke(app, ["task", "create", "--from-jira"])
+
+    assert result.exit_code == 0
+    assert "Cancelled." in result.stdout
+
+
+@patch("et.cli.create_task_from_jira")
+def test_task_create_from_jira_reports_error(mock_create_from_jira):
+    mock_create_from_jira.side_effect = TaskError("no 'jira' block found in the config file")
+
+    result = runner.invoke(app, ["task", "create", "--from-jira"])
+
+    assert result.exit_code == 1
+    assert "Error: no 'jira' block found" in result.output
+
+
+@patch("et.cli.log_time_for_current_workspace")
+def test_task_log_time_delegates_to_jira_log_time(mock_log_time):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=1, issue_key="ISD-321", seconds_logged=4320, tracker_reset=True
+    )
+
+    result = runner.invoke(app, ["task", "log-time", "--comment", "note"])
+
+    assert result.exit_code == 0
+    assert "Logged 1h 12m 0s to jira:ISD-321 (workspace 2)" in result.stdout
+    mock_log_time.assert_called_once_with(description="note", reset=True)
+
+
+@patch("et.cli.complete_task_for_current_workspace")
+def test_task_complete_logs_time_and_frees_workspace(mock_complete):
+    mock_complete.return_value = TaskCompleteResult(
+        log_result=LogTimeResult(
+            workspace_index=1, issue_key="ISD-321", seconds_logged=780, tracker_reset=True
+        )
+    )
+
+    result = runner.invoke(app, ["task", "complete", "--comment", "wrapping up"])
+
+    assert result.exit_code == 0
+    mock_complete.assert_called_once_with(comment="wrapping up")
+    assert "Logged 0h 13m 0s to jira:ISD-321 (workspace 2)" in result.stdout
+    assert "Freed workspace 2" in result.stdout
+
+
+@patch("et.cli.complete_task_for_current_workspace")
+def test_task_complete_reports_error(mock_complete):
+    mock_complete.side_effect = JiraLogTimeError("no Jira issue linked to workspace 1")
+
+    result = runner.invoke(app, ["task", "complete"])
 
     assert result.exit_code == 1
     assert "Error: no Jira issue linked to workspace 1" in result.output

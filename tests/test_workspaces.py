@@ -16,6 +16,7 @@ from et.workspaces import (
     rename_active_workspace,
     rename_all_workspaces,
     set_workspace_names,
+    switch_to_workspace,
 )
 
 
@@ -143,3 +144,27 @@ def test_rename_all_workspaces_with_empty_list_is_noop_write(mock_get_names, moc
     indices = rename_all_workspaces([])
     assert indices == []
     mock_set_names.assert_called_once_with([])
+
+
+@patch("et.workspaces.shutil.which", return_value="/usr/bin/wmctrl")
+@patch("et.workspaces.subprocess.run")
+def test_switch_to_workspace_calls_wmctrl_switch(mock_run, _mock_which):
+    mock_run.return_value = _completed()
+    switch_to_workspace(3)
+    mock_run.assert_called_once_with(
+        ["wmctrl", "-s", "3"], capture_output=True, text=True, check=False
+    )
+
+
+@patch("et.workspaces.shutil.which", return_value="/usr/bin/wmctrl")
+@patch("et.workspaces.subprocess.run")
+def test_switch_to_workspace_raises_on_failure(mock_run, _mock_which):
+    mock_run.return_value = _completed(stderr="no such workspace", returncode=1)
+    with pytest.raises(WorkspaceError, match="no such workspace"):
+        switch_to_workspace(3)
+
+
+@patch("et.workspaces.shutil.which", return_value=None)
+def test_switch_to_workspace_raises_when_wmctrl_missing(_mock_which):
+    with pytest.raises(WorkspaceError, match="wmctrl"):
+        switch_to_workspace(0)

@@ -161,6 +161,22 @@ def save_timers_with_reload(entries: list[TimerEntry], action: str) -> None:
         ) from exc
 
 
+def add_tracker_for_workspace(index: int) -> tuple[str, bool]:
+    """Add a Tracker timer for workspace `index`, if one doesn't already exist.
+
+    Returns a tuple of (timer_name, created), where `created` is False if a
+    timer was already associated with `index` (in which case no write
+    happens and `timer_name` is the existing timer's name).
+    """
+    entries = load_timers()
+    name, created = _ensure_timer_for_workspace(entries, index)
+    if not created:
+        return name, False
+
+    save_timers_with_reload(entries, "writing the new timer")
+    return name, True
+
+
 def add_tracker_for_current_workspace() -> tuple[int, str, bool]:
     """Add a Tracker timer for the active workspace, if one doesn't already exist.
 
@@ -169,13 +185,8 @@ def add_tracker_for_current_workspace() -> tuple[int, str, bool]:
     which case no write happens and `timer_name` is the existing timer's name).
     """
     index = workspaces.get_active_workspace_index()
-    entries = load_timers()
-    name, created = _ensure_timer_for_workspace(entries, index)
-    if not created:
-        return index, name, False
-
-    save_timers_with_reload(entries, "writing the new timer")
-    return index, name, True
+    name, created = add_tracker_for_workspace(index)
+    return index, name, created
 
 
 def add_trackers_for_all_workspaces(

@@ -14,6 +14,7 @@ from et.gsettings import GSettingsError
 from et.tracker import (
     TrackerError,
     add_tracker_for_current_workspace,
+    add_tracker_for_workspace,
     add_trackers_for_all_workspaces,
     build_new_timer,
     dump_all_trackers,
@@ -50,6 +51,49 @@ def test_build_new_timer_matches_tracker_default_shape():
     assert timer["selected"] is False
     assert timer["autoResume"] is True
     assert isinstance(timer["id"], str) and timer["id"]
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch("et.tracker.gsettings.read_string_array", return_value=[])
+def test_add_tracker_for_workspace_creates_timer_for_explicit_index(
+    mock_read, mock_write, mock_reload
+):
+    name, created = add_tracker_for_workspace(4)
+    assert (name, created) == ("ET-5", True)
+    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
+    assert written_entries[0]["workspaceId"] == 4
+
+
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps(
+            {
+                "id": "existing",
+                "name": "mails",
+                "timeElapsed": 42,
+                "running": False,
+                "selected": False,
+                "workspaceId": 2,
+            }
+        ),
+    ],
+)
+def test_add_tracker_for_workspace_is_noop_when_timer_already_exists(mock_read, mock_write):
+    name, created = add_tracker_for_workspace(2)
+    assert (name, created) == ("mails", False)
+    mock_write.assert_not_called()
+
+
+@patch("et.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
+@patch("et.tracker.workspaces.get_active_workspace_index", return_value=0)
+def test_add_tracker_for_current_workspace_delegates_to_explicit_index_helper(
+    mock_get_index, mock_add_for_workspace
+):
+    assert add_tracker_for_current_workspace() == (0, "ET-1", True)
+    mock_add_for_workspace.assert_called_once_with(0)
 
 
 @patch("et.tracker.reload_around", return_value=nullcontext())

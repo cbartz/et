@@ -212,7 +212,7 @@ class JiraSyncResult:
     skipped: list[str]
 
 
-def _default_entry(slot: int, workspace_type: str) -> WorkspaceConfigEntry:
+def default_entry(slot: int, workspace_type: str) -> WorkspaceConfigEntry:
     return WorkspaceConfigEntry(name=f"ET-{slot + 1}", type=workspace_type)
 
 
@@ -240,13 +240,13 @@ def preview_reshuffle(config: EtConfig, issues: list[JiraIssue]) -> ReshuffleOut
         key = jira_key_from_ref(entry.ref)
         if key is None or entry.type == "static" or key in active_keys:
             continue
-        workspaces_list[slot] = _default_entry(slot, entry.type)
+        workspaces_list[slot] = default_entry(slot, entry.type)
 
     while (
         _count_eligible(workspaces_list) < len(issues)
         and len(workspaces_list) < config.max_workspaces
     ):
-        workspaces_list.append(_default_entry(len(workspaces_list), "dynamic"))
+        workspaces_list.append(default_entry(len(workspaces_list), "dynamic"))
 
     return plan_reshuffle(workspaces_list, issues)
 
@@ -311,14 +311,14 @@ def sync_jira_workspaces(
             timer["running"] = False
             timers_changed = True
 
-        workspaces_list[slot] = _default_entry(slot, entry.type)
+        workspaces_list[slot] = default_entry(slot, entry.type)
         deleted.append((slot, key))
 
     while (
         _count_eligible(workspaces_list) < len(issues)
         and len(workspaces_list) < config.max_workspaces
     ):
-        workspaces_list.append(_default_entry(len(workspaces_list), "dynamic"))
+        workspaces_list.append(default_entry(len(workspaces_list), "dynamic"))
 
     try:
         workspaces.configure_static_workspace_count(
