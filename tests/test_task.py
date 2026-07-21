@@ -110,8 +110,20 @@ def test_create_task_workspace_grows_list_when_no_free_slot(
     mock_add_tracker.assert_called_once_with(2)
 
 
+@patch("et.task.workspaces.switch_to_workspace")
+@patch("et.task.workspaces.rename_all_workspaces")
+@patch("et.task.save_config")
+@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-3", True))
+@patch("et.task.workspaces.configure_static_workspace_count")
 @patch("et.task.load_config")
-def test_create_task_workspace_raises_when_capacity_reached(mock_load_config):
+def test_create_task_workspace_grows_max_workspaces_when_capacity_reached(
+    mock_load_config,
+    mock_configure_count,
+    mock_add_tracker,
+    mock_save_config,
+    _mock_rename_all,
+    _mock_switch,
+):
     mock_load_config.return_value = _config(
         [
             WorkspaceConfigEntry(name="ET-1", ref="jira:ISD-1"),
@@ -120,8 +132,14 @@ def test_create_task_workspace_raises_when_capacity_reached(mock_load_config):
         max_workspaces=2,
     )
 
-    with pytest.raises(TaskError, match="no free workspace slot"):
-        create_task_workspace("my-task")
+    result = create_task_workspace("my-task")
+
+    assert result.workspace_index == 2
+    mock_configure_count.assert_called_once_with(3)
+    mock_add_tracker.assert_called_once_with(2)
+    saved_config = mock_save_config.call_args[0][0]
+    assert saved_config.max_workspaces == 3
+    assert len(saved_config.workspaces) == 3
 
 
 @patch("et.task.workspaces.configure_static_workspace_count", side_effect=WorkspaceError("boom"))

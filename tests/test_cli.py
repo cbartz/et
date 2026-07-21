@@ -412,12 +412,14 @@ def test_task_info_reports_tracker_error(mock_load_config, mock_index, _mock_loa
 
 
 @patch("et.cli.create_task_workspace")
-def test_task_create_with_name_argument_skips_prompts(mock_create):
+def test_task_create_manual_with_name_argument_skips_prompts(mock_create):
     mock_create.return_value = TaskCreateResult(
         workspace_index=1, name="my-task", ref=None, timer_created=True
     )
 
-    result = runner.invoke(app, ["task", "create", "my-task", "--description", "doing stuff"])
+    result = runner.invoke(
+        app, ["task", "create", "my-task", "--description", "doing stuff", "--manual"]
+    )
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with("my-task", description="doing stuff")
@@ -426,32 +428,41 @@ def test_task_create_with_name_argument_skips_prompts(mock_create):
 
 
 @patch("et.cli.create_task_workspace")
-def test_task_create_prompts_for_name_and_description_when_omitted(mock_create):
+def test_task_create_manual_prompts_for_name_and_description_when_omitted(mock_create):
     mock_create.return_value = TaskCreateResult(
         workspace_index=0, name="typed-name", ref=None, timer_created=True
     )
 
-    result = runner.invoke(app, ["task", "create"], input="typed-name\ntyped-description\n")
+    result = runner.invoke(
+        app, ["task", "create", "--manual"], input="typed-name\ntyped-description\n"
+    )
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with("typed-name", description="typed-description")
 
 
 @patch("et.cli.create_task_workspace")
-def test_task_create_reports_error(mock_create):
+def test_task_create_manual_reports_error(mock_create):
     mock_create.side_effect = TaskError("no free workspace slot available")
 
-    result = runner.invoke(app, ["task", "create", "my-task", "--description", "d"])
+    result = runner.invoke(app, ["task", "create", "my-task", "--description", "d", "--manual"])
 
     assert result.exit_code == 1
     assert "Error: no free workspace slot available" in result.output
 
 
-def test_task_create_rejects_name_together_with_from_jira():
-    result = runner.invoke(app, ["task", "create", "my-task", "--from-jira"])
+def test_task_create_rejects_name_without_manual():
+    result = runner.invoke(app, ["task", "create", "my-task"])
 
     assert result.exit_code == 1
-    assert "must not be given together with --from-jira" in result.output
+    assert "NAME/--description require --manual" in result.output
+
+
+def test_task_create_rejects_manual_together_with_from_jira():
+    result = runner.invoke(app, ["task", "create", "--manual", "--from-jira"])
+
+    assert result.exit_code == 1
+    assert "--manual and --from-jira are mutually exclusive" in result.output
 
 
 @patch("et.cli.create_task_from_jira")
@@ -501,6 +512,18 @@ def test_task_create_from_jira_reports_error(mock_create_from_jira):
 
     assert result.exit_code == 1
     assert "Error: no 'jira' block found" in result.output
+
+
+@patch("et.cli.create_task_from_jira")
+def test_task_create_defaults_to_from_jira(mock_create_from_jira):
+    mock_create_from_jira.return_value = None
+
+    result = runner.invoke(app, ["task", "create"])
+
+    assert result.exit_code == 0
+    mock_create_from_jira.assert_called_once()
+    assert "Cancelled." in result.stdout
+
 
 
 @patch("et.cli.log_time_for_current_workspace")

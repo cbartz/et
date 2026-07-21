@@ -137,9 +137,9 @@ as before.
 
 ```bash
 et task info                                # same as `et ws info`, plus time spent
-et task create                              # prompts for a name/description
-et task create isd-321 -d "Fix login bug"   # or give them directly
-et task create --from-jira                  # pick from your active Jira issues
+et task create                              # pick from your active Jira issues (the default)
+et task create --manual                     # prompts for a name/description instead
+et task create isd-321 -d "Fix login bug" --manual   # or give them directly
 et task log-time                            # same as `et jira log-time`
 et task complete                            # log time, then free the workspace
 ```
@@ -150,11 +150,14 @@ elapsed time of the `ET-<n>` Tracker timer bound to the active workspace
 currently running).
 
 `et task create` allocates the first free (non-`static`, unlinked) workspace
-slot — growing the configured workspace list up to `max_workspaces` if none
-is free, same as `et jira get` — creates its `ET-<n>` Tracker timer, and
-switches GNOME to it. `--from-jira` lists your active Jira issues that
-aren't already linked to a workspace, lets you pick one, and links the new
-workspace to it (same as `et jira get` would).
+slot — growing the configured workspace list if none is free, bumping
+`max_workspaces` itself if every existing slot is already taken, so it
+never fails for lack of room — creates its `ET-<n>` Tracker timer, and
+switches GNOME to it. By default (or with `--from-jira`) it lists your
+active Jira issues that aren't already linked to a workspace, lets you pick
+one, and links the new workspace to it (same as `et jira get` would).
+Pass `--manual` to name the workspace yourself instead (prompting for a
+name/description, or take them from `NAME`/`--description`).
 
 `et task complete` logs the active workspace's tracked time to Jira (like
 `et jira log-time`, no confirmation prompt) and then resets that workspace

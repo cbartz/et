@@ -481,30 +481,41 @@ def task_info() -> None:
 @task_app.command("create")
 def task_create(
     name: str | None = typer.Argument(
-        None, help="Name for the new task's workspace (prompted for if omitted)."
+        None, help="Name for the new task's workspace (--manual only; prompted for if omitted)."
     ),
     description: str | None = typer.Option(
-        None, "--description", "-d", help="Optional description for the new task."
+        None, "--description", "-d", help="Optional description for the new task (--manual only)."
+    ),
+    manual: bool = typer.Option(
+        False, "--manual", help="Name the task yourself instead of picking a Jira issue."
     ),
     from_jira: bool = typer.Option(
-        False, "--from-jira", help="Pick an active Jira issue to create the task from."
+        False,
+        "--from-jira",
+        help="Pick an active Jira issue to create the task from (the default).",
     ),
 ) -> None:
     """Create a new task: allocate a workspace slot, its Tracker timer, and switch to it.
 
-    Without --from-jira, prompts interactively for a name/description when
-    not given as arguments/options. With --from-jira, lists your active
-    Jira issues that aren't already linked to a workspace and lets you pick
-    one instead (its summary becomes the workspace name/description and its
-    key is linked, same as `et jira get`).
+    Growing the workspace pool never fails for lack of room: `et task
+    create` bumps `max_workspaces` itself if every existing slot is
+    already taken.
+
+    By default (or with --from-jira), lists your active Jira issues that
+    aren't already linked to a workspace and lets you pick one (its
+    summary becomes the workspace name/description and its key is
+    linked, same as `et jira get`). With --manual, prompts interactively
+    for a name/description when not given as arguments/options instead.
     """
-    if from_jira and (name is not None or description is not None):
-        typer.echo(
-            "Error: NAME/--description must not be given together with --from-jira", err=True
-        )
+    if manual and from_jira:
+        typer.echo("Error: --manual and --from-jira are mutually exclusive", err=True)
         raise typer.Exit(code=1)
 
-    if from_jira:
+    if not manual and (name is not None or description is not None):
+        typer.echo("Error: NAME/--description require --manual", err=True)
+        raise typer.Exit(code=1)
+
+    if not manual:
         try:
             config = load_config()
         except ConfigError:
@@ -561,6 +572,7 @@ def task_create(
         raise typer.Exit(code=1) from error
 
     _print_task_created(result)
+
 
 
 @task_app.command("log-time")
