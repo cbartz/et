@@ -5,14 +5,12 @@ from __future__ import annotations
 import pytest
 
 from et.config import (
-    DEFAULT_MAX_WORKSPACES,
     DEFAULT_PRIORITY_ORDER,
     ConfigError,
     EtConfig,
     JiraConfig,
     WorkspaceConfigEntry,
     get_config_path,
-    get_max_workspaces,
     load_config,
     load_workspace_names,
     save_config,
@@ -89,10 +87,9 @@ def test_load_workspace_names_treats_empty_file_as_no_workspaces(config_dir):
     assert load_workspace_names() == []
 
 
-def test_load_config_defaults_max_workspaces_and_jira_when_absent(config_dir):
+def test_load_config_defaults_jira_and_workspaces_when_absent(config_dir):
     (config_dir / "config.yaml").write_text("workspaces:\n  - name: mails\n")
     config = load_config()
-    assert config.max_workspaces == DEFAULT_MAX_WORKSPACES
     assert config.jira is None
     assert config.workspaces == [WorkspaceConfigEntry(name="mails")]
 
@@ -100,7 +97,6 @@ def test_load_config_defaults_max_workspaces_and_jira_when_absent(config_dir):
 def test_load_config_parses_full_schema(config_dir):
     (config_dir / "config.yaml").write_text(
         """
-        max_workspaces: 12
         jira:
           base_url: https://example.atlassian.net/
           email: me@example.com
@@ -118,7 +114,6 @@ def test_load_config_parses_full_schema(config_dir):
     )
     config = load_config()
 
-    assert config.max_workspaces == 12
     assert config.jira == JiraConfig(
         base_url="https://example.atlassian.net/",
         email="me@example.com",
@@ -176,7 +171,6 @@ def test_load_config_rejects_jira_block_missing_required_key(config_dir):
 
 def test_save_config_round_trips_through_load_config(config_dir):
     config = EtConfig(
-        max_workspaces=11,
         jira=JiraConfig(
             base_url="https://example.atlassian.net/",
             email="me@example.com",
@@ -199,15 +193,6 @@ def test_save_config_round_trips_through_load_config(config_dir):
     assert load_config() == config
     mode = (config_dir / "config.yaml").stat().st_mode & 0o777
     assert mode == 0o600
-
-
-def test_get_max_workspaces_defaults_when_config_file_absent(config_dir):
-    assert get_max_workspaces() == DEFAULT_MAX_WORKSPACES
-
-
-def test_get_max_workspaces_reads_value_from_config_file(config_dir):
-    (config_dir / "config.yaml").write_text("max_workspaces: 15\nworkspaces: []\n")
-    assert get_max_workspaces() == 15
 
 
 def test_load_workspace_names_still_returns_plain_name_list(config_dir):

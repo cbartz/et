@@ -7,7 +7,15 @@ from unittest.mock import patch
 
 import pytest
 
-from et.gsettings import GSettingsError, read_string_array, set_boolean, set_int, write_string_array
+from et.gsettings import (
+    GSettingsError,
+    read_boolean,
+    read_int,
+    read_string_array,
+    set_boolean,
+    set_int,
+    write_string_array,
+)
 
 
 def _completed(
@@ -95,3 +103,45 @@ def test_set_int_raises_on_nonzero_exit(mock_run, _mock_which):
     mock_run.return_value = _completed(stderr="some failure\n", returncode=1)
     with pytest.raises(GSettingsError, match="gsettings set failed"):
         set_int("org.example.schema", "some-count", 10)
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_read_boolean_parses_true_and_false(mock_run, _mock_which):
+    mock_run.return_value = _completed(stdout="true\n")
+    assert read_boolean("org.example.schema", "some-flag") is True
+    mock_run.return_value = _completed(stdout="false\n")
+    assert read_boolean("org.example.schema", "some-flag") is False
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_read_boolean_raises_on_unexpected_value(mock_run, _mock_which):
+    mock_run.return_value = _completed(stdout="maybe\n")
+    with pytest.raises(GSettingsError, match="boolean value"):
+        read_boolean("org.example.schema", "some-flag")
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_read_boolean_raises_on_nonzero_exit(mock_run, _mock_which):
+    mock_run.return_value = _completed(stderr="boom\n", returncode=1)
+    with pytest.raises(GSettingsError, match="gsettings get failed"):
+        read_boolean("org.example.schema", "some-flag")
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_read_int_parses_plain_and_typed_output(mock_run, _mock_which):
+    mock_run.return_value = _completed(stdout="4\n")
+    assert read_int("org.example.schema", "some-count") == 4
+    mock_run.return_value = _completed(stdout="uint32 6\n")
+    assert read_int("org.example.schema", "some-count") == 6
+
+
+@patch("et.gsettings.shutil.which", return_value="/usr/bin/gsettings")
+@patch("et.gsettings.subprocess.run")
+def test_read_int_raises_on_unparsable_output(mock_run, _mock_which):
+    mock_run.return_value = _completed(stdout="not-a-number\n")
+    with pytest.raises(GSettingsError, match="could not parse"):
+        read_int("org.example.schema", "some-count")

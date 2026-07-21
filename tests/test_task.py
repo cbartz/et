@@ -22,11 +22,9 @@ from et.workspaces import WorkspaceError
 def _config(
     workspaces: list[WorkspaceConfigEntry] | None = None,
     *,
-    max_workspaces: int = 10,
     with_jira: bool = True,
 ) -> EtConfig:
     return EtConfig(
-        max_workspaces=max_workspaces,
         jira=(
             JiraConfig(
                 base_url="https://example.atlassian.net/",
@@ -49,11 +47,13 @@ def _config(
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
 @patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
-@patch("et.task.workspaces.configure_static_workspace_count")
+@patch("et.task.workspaces.set_workspace_count")
+@patch("et.task.workspaces.get_workspace_count", return_value=5)
 @patch("et.task.load_config")
 def test_create_task_workspace_uses_first_free_slot(
     mock_load_config,
-    mock_configure_count,
+    _mock_get_count,
+    mock_set_count,
     mock_add_tracker,
     mock_save_config,
     mock_rename_all,
@@ -69,11 +69,13 @@ def test_create_task_workspace_uses_first_free_slot(
 
     result = create_task_workspace("my-task", description="doing stuff")
 
+    assert result is not None
     assert result.workspace_index == 1
     assert result.name == "my-task"
     assert result.ref is None
     assert result.timer_created is True
 
+    mock_set_count.assert_not_called()
     mock_add_tracker.assert_called_once_with(1)
     saved_config = mock_save_config.call_args[0][0]
     assert saved_config.workspaces[1] == WorkspaceConfigEntry(
@@ -90,11 +92,13 @@ def test_create_task_workspace_uses_first_free_slot(
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
 @patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
-@patch("et.task.workspaces.configure_static_workspace_count")
+@patch("et.task.workspaces.set_workspace_count")
+@patch("et.task.workspaces.get_workspace_count", return_value=1)
 @patch("et.task.load_config")
 def test_create_task_workspace_succeeds_when_window_move_unsupported(
     mock_load_config,
-    _mock_configure_count,
+    _mock_get_count,
+    _mock_set_count,
     _mock_add_tracker,
     _mock_save_config,
     _mock_rename_all,
@@ -106,6 +110,7 @@ def test_create_task_workspace_succeeds_when_window_move_unsupported(
 
     result = create_task_workspace("my-task")
 
+    assert result is not None
     assert result.window_moved is False
     mock_switch.assert_called_once_with(0)
 
@@ -114,31 +119,32 @@ def test_create_task_workspace_succeeds_when_window_move_unsupported(
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
-@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-3", True))
-@patch("et.task.workspaces.configure_static_workspace_count")
+@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-2", True))
+@patch("et.task.workspaces.set_workspace_count")
+@patch("et.task.workspaces.get_workspace_count", return_value=3)
 @patch("et.task.load_config")
-def test_create_task_workspace_grows_list_when_no_free_slot(
+def test_create_task_workspace_uses_implicit_bare_slot_within_count(
     mock_load_config,
-    mock_configure_count,
+    _mock_get_count,
+    mock_set_count,
     mock_add_tracker,
     mock_save_config,
-    mock_rename_all,
-    mock_switch,
-    mock_move,
+    _mock_rename_all,
+    _mock_switch,
+    _mock_move,
 ):
+    # Only one workspace listed, but GNOME has 3 — slot 1 is an implicit
+    # free bare slot, so no growth prompt is needed.
     mock_load_config.return_value = _config(
-        [
-            WorkspaceConfigEntry(name="ET-1", ref="jira:ISD-1"),
-            WorkspaceConfigEntry(name="ET-2", ref="jira:ISD-2"),
-        ],
-        max_workspaces=5,
+        [WorkspaceConfigEntry(name="ET-1", ref="jira:ISD-1")]
     )
 
     result = create_task_workspace("my-task")
 
-    assert result.workspace_index == 2
-    mock_configure_count.assert_called_once_with(5)
-    mock_add_tracker.assert_called_once_with(2)
+    assert result is not None
+    assert result.workspace_index == 1
+    mock_set_count.assert_not_called()
+    mock_add_tracker.assert_called_once_with(1)
 
 
 @patch("et.task.workspaces.move_active_window_to_workspace")
@@ -146,11 +152,13 @@ def test_create_task_workspace_grows_list_when_no_free_slot(
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
 @patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-3", True))
-@patch("et.task.workspaces.configure_static_workspace_count")
+@patch("et.task.workspaces.set_workspace_count")
+@patch("et.task.workspaces.get_workspace_count", return_value=2)
 @patch("et.task.load_config")
-def test_create_task_workspace_grows_max_workspaces_when_capacity_reached(
+def test_create_task_workspace_prompts_and_grows_when_all_full(
     mock_load_config,
-    mock_configure_count,
+    _mock_get_count,
+    mock_set_count,
     mock_add_tracker,
     mock_save_config,
     _mock_rename_all,
@@ -161,34 +169,67 @@ def test_create_task_workspace_grows_max_workspaces_when_capacity_reached(
         [
             WorkspaceConfigEntry(name="ET-1", ref="jira:ISD-1"),
             WorkspaceConfigEntry(name="ET-2", ref="jira:ISD-2"),
-        ],
-        max_workspaces=2,
+        ]
     )
 
-    result = create_task_workspace("my-task")
+    seen_count: list[int] = []
 
+    def confirm_grow(count: int) -> bool:
+        seen_count.append(count)
+        return True
+
+    result = create_task_workspace("my-task", confirm_grow=confirm_grow)
+
+    assert result is not None
     assert result.workspace_index == 2
-    mock_configure_count.assert_called_once_with(3)
+    assert seen_count == [2]
+    mock_set_count.assert_called_once_with(3)
     mock_add_tracker.assert_called_once_with(2)
     saved_config = mock_save_config.call_args[0][0]
-    assert saved_config.max_workspaces == 3
     assert len(saved_config.workspaces) == 3
 
 
-@patch("et.task.workspaces.configure_static_workspace_count", side_effect=WorkspaceError("boom"))
+@patch("et.task.workspaces.set_workspace_count")
+@patch("et.task.save_config")
+@patch("et.task.tracker.add_tracker_for_workspace")
+@patch("et.task.workspaces.get_workspace_count", return_value=2)
 @patch("et.task.load_config")
-def test_create_task_workspace_wraps_workspace_error(mock_load_config, _mock_configure_count):
+def test_create_task_workspace_returns_none_when_grow_declined(
+    mock_load_config,
+    _mock_get_count,
+    mock_add_tracker,
+    mock_save_config,
+    mock_set_count,
+):
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="ET-1", ref="jira:ISD-1"),
+            WorkspaceConfigEntry(name="ET-2", ref="jira:ISD-2"),
+        ]
+    )
+
+    result = create_task_workspace("my-task", confirm_grow=lambda count: False)
+
+    assert result is None
+    mock_set_count.assert_not_called()
+    mock_add_tracker.assert_not_called()
+    mock_save_config.assert_not_called()
+
+
+@patch("et.task.workspaces.get_workspace_count", side_effect=WorkspaceError("boom"))
+@patch("et.task.load_config")
+def test_create_task_workspace_wraps_workspace_error(mock_load_config, _mock_get_count):
     mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ET-1")])
 
     with pytest.raises(TaskError, match="boom"):
         create_task_workspace("my-task")
 
 
-@patch("et.task.workspaces.configure_static_workspace_count")
 @patch("et.task.tracker.add_tracker_for_workspace", side_effect=TrackerError("tracker boom"))
+@patch("et.task.workspaces.get_workspace_count", return_value=1)
 @patch("et.task.load_config")
 def test_create_task_workspace_wraps_tracker_error(
-    mock_load_config, _mock_add_tracker, _mock_configure_count
+    mock_load_config, _mock_get_count, _mock_add_tracker
 ):
     mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ET-1")])
 
@@ -196,12 +237,12 @@ def test_create_task_workspace_wraps_tracker_error(
         create_task_workspace("my-task")
 
 
-@patch("et.task.workspaces.configure_static_workspace_count")
-@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
 @patch("et.task.save_config", side_effect=ConfigError("config boom"))
+@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
+@patch("et.task.workspaces.get_workspace_count", return_value=1)
 @patch("et.task.load_config")
 def test_create_task_workspace_wraps_config_error(
-    mock_load_config, _mock_save_config, _mock_add_tracker, _mock_configure_count
+    mock_load_config, _mock_get_count, _mock_add_tracker, _mock_save_config
 ):
     mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ET-1")])
 
@@ -267,13 +308,19 @@ def test_create_task_from_jira_delegates_to_create_task_workspace(
     mock_fetch.return_value = [_issue("ISD-2", summary="A rather long issue summary here")]
     mock_create_task_workspace.return_value = "created-result"
 
-    result = create_task_from_jira(select_issue=lambda issues: issues[0])
+    def confirm_grow(count: int) -> bool:
+        return True
+
+    result = create_task_from_jira(
+        select_issue=lambda issues: issues[0], confirm_grow=confirm_grow
+    )
 
     assert result == "created-result"
     mock_create_task_workspace.assert_called_once_with(
         name="A rather long issue",
         description="A rather long issue summary here",
         ref="jira:ISD-2",
+        confirm_grow=confirm_grow,
     )
 
 

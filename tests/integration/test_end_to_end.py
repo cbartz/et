@@ -27,6 +27,7 @@ runner = CliRunner()
 
 WORKSPACE_NAMES = ("org.gnome.desktop.wm.preferences", "workspace-names")
 TRACKER_TIMERS = ("org.gnome.shell.extensions.tracker", "timers")
+DYNAMIC_WORKSPACES = ("org.gnome.mutter", "dynamic-workspaces")
 TRACKER_UUID = "tracker@aliakseiz.github.com"
 
 
@@ -39,6 +40,7 @@ class FakeSystem:
         self.gsettings: dict[tuple[str, str], str] = {
             WORKSPACE_NAMES: "@as []",
             TRACKER_TIMERS: "@as []",
+            DYNAMIC_WORKSPACES: "false",
         }
 
     def run(self, args, capture_output=True, text=True, check=False, env=None):

@@ -20,6 +20,7 @@ from et.tracker import TrackerError, find_timer_for_workspace, format_duration, 
 from et.workspaces import (
     WorkspaceError,
     get_active_workspace_index,
+    is_dynamic_workspaces_enabled,
     rename_active_workspace,
     rename_all_workspaces,
 )
@@ -68,10 +69,37 @@ def _root(ctx: typer.Context) -> None:
     """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
+    _ensure_static_workspaces()
+
     if ctx.invoked_subcommand is not None:
         return
 
     _show_active_workspace_info(ctx)
+
+
+def _ensure_static_workspaces() -> None:
+    """Exit with setup instructions unless GNOME uses a fixed set of workspaces.
+
+    et manages a fixed pool of "ET-<n>" workspaces, which only works when
+    GNOME's dynamic-workspaces mode is off. If it's on, print how to disable
+    it (and pick a workspace count) and exit non-zero.
+    """
+    try:
+        dynamic = is_dynamic_workspaces_enabled()
+    except WorkspaceError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    if dynamic:
+        typer.echo(
+            "Error: et needs a fixed set of GNOME workspaces, but dynamic "
+            "workspaces are enabled.\n"
+            "Disable them and choose how many workspaces you want:\n"
+            "  gsettings set org.gnome.mutter dynamic-workspaces false\n"
+            "  gsettings set org.gnome.desktop.wm.preferences num-workspaces <N>",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command("info")
@@ -198,9 +226,8 @@ def ws_delete(
     log-time`) first if it's still tracking something, or pass `--force`
     to delete it anyway (its Tracker timer, if any, is discarded rather
     than logged). Every non-static workspace after it (and its Tracker
-    timer) shifts one slot to the left, then the now-freed last slot is
-    removed entirely: `max_workspaces` is decremented by 1 and GNOME's
-    actual workspace count shrinks to match.
+    timer) shifts one slot to the left, leaving the freed bare "ET-<n>"
+    slot at the end of the pool. GNOME's workspace count is left unchanged.
     """
     try:
         result = delete_active_workspace(force=force)
@@ -208,8 +235,7 @@ def ws_delete(
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
-    typer.echo(f"Deleted workspace {result.workspace_index + 1}")
-    typer.echo(f"Now managing {result.remaining_workspaces} workspaces")
+    typer.echo(f"Freed workspace {result.workspace_index + 1} (shifted later tasks left)")
 
 
 def _print_task_created(result: TaskCreateResult) -> None:
@@ -233,11 +259,11 @@ def jira_start() -> None:
     Lists your active Jira issues that aren't already linked to a
     workspace and lets you pick one (its summary becomes the workspace
     name/description and its key is linked). If the selected issue isn't
-    already "In Progress", offers to move it there. Growing the workspace
-    pool never fails for lack of room: `et jira start` bumps
-    `max_workspaces` itself if every existing slot is already taken. The
-    terminal window `et jira start` was run from is moved along to the
-    new workspace, so it doesn't get left behind.
+    already "In Progress", offers to move it there. When every workspace is
+    already taken, `et jira start` asks whether to add one more (bumping
+    GNOME's workspace count by one). The terminal window `et jira start`
+    was run from is moved along to the new workspace, so it doesn't get
+    left behind.
     """
     try:
         config = load_config()
@@ -277,8 +303,13 @@ def jira_start() -> None:
             f"{issue.key} is currently '{status_display}'. Move it to 'In Progress'?"
         )
 
+    def confirm_grow(count: int) -> bool:
+        return typer.confirm(
+            f"All {count} workspaces are in use. Add another workspace?"
+        )
+
     try:
-        result = create_task_from_jira(select_issue, confirm_transition)
+        result = create_task_from_jira(select_issue, confirm_transition, confirm_grow)
     except (ConfigError, TaskError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error

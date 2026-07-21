@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from et.cli import _hyperlink, app
@@ -13,8 +14,20 @@ from et.jira import JiraIssue
 from et.jira_time import JiraLogTimeError, LogTimeResult
 from et.task import TaskCompleteResult, TaskCreateResult, TaskError
 from et.tracker import TrackerError
+from et.workspaces import WorkspaceError
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _static_workspaces():
+    """Every command runs the root callback's static-workspace check first.
+
+    Default it to "static" (dynamic disabled) so ordinary command tests
+    aren't blocked by it; the dedicated static-check tests override this.
+    """
+    with patch("et.cli.is_dynamic_workspaces_enabled", return_value=False):
+        yield
 
 
 def test_hyperlink_wraps_text_in_osc8_escape_codes_on_a_tty():
@@ -38,7 +51,6 @@ def _config(workspaces: list[WorkspaceConfigEntry] | None = None) -> EtConfig:
             jql="assignee = currentUser()",
         ),
         workspaces=workspaces or [],
-        max_workspaces=10,
     )
 
 
@@ -206,13 +218,12 @@ def test_info_command_shows_full_app_help_when_workspace_is_static(mock_load_con
 def test_ws_delete_reports_summary(mock_delete):
     from et.ws import WsDeleteResult
 
-    mock_delete.return_value = WsDeleteResult(workspace_index=1, remaining_workspaces=4)
+    mock_delete.return_value = WsDeleteResult(workspace_index=1)
 
     result = runner.invoke(app, ["ws", "delete"])
 
     assert result.exit_code == 0
-    assert "Deleted workspace 2" in result.stdout
-    assert "Now managing 4 workspaces" in result.stdout
+    assert "Freed workspace 2 (shifted later tasks left)" in result.stdout
 
 
 @patch("et.cli.delete_active_workspace")
@@ -231,13 +242,33 @@ def test_ws_delete_reports_error(mock_delete):
 def test_ws_delete_force_passes_flag_through(mock_delete):
     from et.ws import WsDeleteResult
 
-    mock_delete.return_value = WsDeleteResult(workspace_index=0, remaining_workspaces=1)
+    mock_delete.return_value = WsDeleteResult(workspace_index=0)
 
     result = runner.invoke(app, ["ws", "delete", "--force"])
 
     assert result.exit_code == 0
     mock_delete.assert_called_once_with(force=True)
-    assert "Deleted workspace 1" in result.stdout
+    assert "Freed workspace 1 (shifted later tasks left)" in result.stdout
+
+
+# --- static-workspace startup check ------------------------------------------
+
+
+@patch("et.cli.is_dynamic_workspaces_enabled", return_value=True)
+def test_root_exits_when_dynamic_workspaces_enabled(_mock_dynamic):
+    result = runner.invoke(app, ["ws", "delete"])
+
+    assert result.exit_code == 1
+    assert "dynamic workspaces are enabled" in result.output
+    assert "gsettings set org.gnome.mutter dynamic-workspaces false" in result.output
+
+
+@patch("et.cli.is_dynamic_workspaces_enabled", side_effect=WorkspaceError("gsettings missing"))
+def test_root_exits_when_static_check_fails(_mock_dynamic):
+    result = runner.invoke(app, ["ws", "delete"])
+
+    assert result.exit_code == 1
+    assert "Error: gsettings missing" in result.output
 
 
 # --- et jira -----------------------------------------------------------------
@@ -249,7 +280,8 @@ def test_jira_start_lists_issues_and_creates_from_selection(mock_create_from_jir
         workspace_index=2, name="ISD-2", ref="jira:ISD-2", timer_created=True, window_moved=True
     )
 
-    def fake_create_from_jira(select_issue, confirm_transition):
+    def fake_create_from_jira(select_issue, confirm_transition, confirm_grow):
+        del confirm_grow
         del confirm_transition
         issues = [
             JiraIssue(key="ISD-2", summary="Second issue", priority="High", status="In Progress")
@@ -275,7 +307,8 @@ def test_jira_start_notes_when_window_could_not_be_moved(mock_create_from_jira):
         workspace_index=2, name="ISD-2", ref="jira:ISD-2", timer_created=True, window_moved=False
     )
 
-    def fake_create_from_jira(select_issue, confirm_transition):
+    def fake_create_from_jira(select_issue, confirm_transition, confirm_grow):
+        del confirm_grow
         del confirm_transition
         issues = [
             JiraIssue(key="ISD-2", summary="Second issue", priority="High", status="In Progress")
@@ -316,7 +349,8 @@ def test_jira_start_reports_error(mock_create_from_jira):
 def test_jira_start_prompts_to_move_issue_to_in_progress_when_confirmed(mock_create_from_jira):
     captured = {}
 
-    def fake_create_from_jira(select_issue, confirm_transition):
+    def fake_create_from_jira(select_issue, confirm_transition, confirm_grow):
+        del confirm_grow
         del select_issue
         issue = JiraIssue(key="ISD-2", summary="Second issue", priority="High", status="To Do")
         captured["confirmed"] = confirm_transition(issue)
@@ -335,7 +369,8 @@ def test_jira_start_prompts_to_move_issue_to_in_progress_when_confirmed(mock_cre
 def test_jira_start_does_not_transition_when_declined(mock_create_from_jira):
     captured = {}
 
-    def fake_create_from_jira(select_issue, confirm_transition):
+    def fake_create_from_jira(select_issue, confirm_transition, confirm_grow):
+        del confirm_grow
         del select_issue
         issue = JiraIssue(key="ISD-2", summary="Second issue", priority="High", status="To Do")
         captured["confirmed"] = confirm_transition(issue)

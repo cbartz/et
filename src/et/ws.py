@@ -26,7 +26,6 @@ class WsDeleteResult:
     """Summary of what `delete_active_workspace` did."""
 
     workspace_index: int
-    remaining_workspaces: int
 
 
 def shift_workspaces_left(
@@ -105,7 +104,7 @@ def _trim_trailing_default_entries(workspaces_list: list[WorkspaceConfigEntry]) 
 
 
 def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
-    """Delete the active workspace's slot, shifting later ones left to fill the gap.
+    """Free the active workspace's slot, shifting later ones left to fill the gap.
 
     Only works on a "free" workspace — non-`static`, and with no Jira `ref`
     linked (the same definition `et jira start` uses to find an empty
@@ -115,12 +114,11 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
     (its Tracker timer, if any, is discarded rather than logged).
 
     Every non-static workspace after the active one (and its Tracker
-    timer) is shifted one slot to the left, same as `et jira complete`,
-    then the now-bare last slot is removed entirely: `max_workspaces` is
-    decremented by 1 and GNOME's actual workspace count is shrunk to
-    match. Switches to whichever workspace now occupies the deleted slot's
-    old position (or the new last workspace, if the deleted slot was the
-    last one).
+    timer) is shifted one slot to the left, same as `et jira complete`, so
+    the freed bare slot ends up at the end of the non-static range. GNOME's
+    workspace count is left untouched (the user manages it) — the freed slot
+    simply becomes an empty "ET-<n>" workspace, ready for a future `et jira
+    start`.
 
     Raises `ConfigError` if the config file is missing/malformed,
     `WorkspaceError` (unwrapped) if the active workspace can't be
@@ -128,12 +126,14 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
     underlying GNOME/Tracker operations fail.
     """
     config: EtConfig = load_config()
-    if config.max_workspaces <= 1:
-        raise WsDeleteError("cannot delete the last remaining workspace")
-
     index = workspaces.get_active_workspace_index()
 
-    padded_len = max(len(config.workspaces), config.max_workspaces, index + 1)
+    try:
+        count = workspaces.get_workspace_count()
+    except WorkspaceError as exc:
+        raise WsDeleteError(str(exc)) from exc
+
+    padded_len = max(len(config.workspaces), count, index + 1)
     workspaces_list = list(config.workspaces) + [
         default_entry(slot, "dynamic") for slot in range(len(config.workspaces), padded_len)
     ]
@@ -153,25 +153,24 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
     except TrackerError as exc:
         raise WsDeleteError(str(exc)) from exc
 
+    workspaces_list[index] = default_entry(index, entry.type)
     timers_changed = shift_workspaces_left(workspaces_list, entries, index)
-    workspaces_list.pop()
-    new_max_workspaces = config.max_workspaces - 1
-    _trim_trailing_default_entries(workspaces_list)
+
+    saved_list = list(workspaces_list)
+    _trim_trailing_default_entries(saved_list)
 
     try:
         if timers_changed:
             tracker.save_timers_with_reload(entries, "shifting timers after deleting a workspace")
-        new_total = max(len(workspaces_list), new_max_workspaces)
-        workspaces.configure_static_workspace_count(new_total)
-        save_config(
-            replace(config, max_workspaces=new_max_workspaces, workspaces=workspaces_list)
-        )
+        save_config(replace(config, workspaces=saved_list))
+        # Rename the full padded range (not the trimmed list) so freed
+        # trailing slots get their bare "ET-<n>" GNOME name back.
         workspaces.rename_all_workspaces([item.name for item in workspaces_list])
-        workspaces.switch_to_workspace(min(index, new_total - 1))
+        workspaces.switch_to_workspace(index)
     except (ConfigError, WorkspaceError, TrackerError) as exc:
         raise WsDeleteError(str(exc)) from exc
 
-    return WsDeleteResult(workspace_index=index, remaining_workspaces=new_max_workspaces)
+    return WsDeleteResult(workspace_index=index)
 
 
 __all__ = [

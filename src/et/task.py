@@ -2,14 +2,14 @@
 layer on top of the Tracker and Jira integrations (`et.tracker`,
 `et.jira`, `et.jira_ref`, `et.jira_time`), plus `et ws`.
 
-`et jira start` allocates a free workspace slot (growing the configured
-list, and bumping `max_workspaces` itself if the current cap is already
-full), creates its Tracker timer, and switches GNOME to it — moving the
-terminal window it's run from along with it — picking the slot's
-name/description/Jira link from the user's active Jira issues (and
-offering to move the selected issue to "In Progress" if it isn't
-already). `et jira complete` logs the active workspace's tracked time to
-Jira (reusing `et.jira_time.log_time_for_current_workspace`), resets that
+`et jira start` allocates a free workspace slot among GNOME's fixed set of
+workspaces (prompting, via an injected `confirm_grow` callback, to add one
+more workspace when they're all taken), creates its Tracker timer, and
+switches GNOME to it — moving the terminal window it's run from along with
+it — picking the slot's name/description/Jira link from the user's active
+Jira issues (and offering to move the selected issue to "In Progress" if it
+isn't already). `et jira complete` logs the active workspace's tracked time
+to Jira (reusing `et.jira_time.log_time_for_current_workspace`), resets that
 workspace back to a bare "ET-<n>" slot, and shifts every non-`static`
 slot after it one slot to the left (moving each one's Tracker timer along
 with it) so the freed slot ends up at the end of the non-static range
@@ -68,52 +68,65 @@ class TaskCompleteResult:
     log_result: LogTimeResult
 
 
-def _find_free_slot(workspaces_list: list[WorkspaceConfigEntry]) -> int | None:
-    """Return the index of the first non-static, ref-less slot, if any."""
-    for index, entry in enumerate(workspaces_list):
+def _find_free_slot(workspaces_list: list[WorkspaceConfigEntry], count: int) -> int | None:
+    """Return the first free (non-static, ref-less) slot within `count` workspaces.
+
+    Only considers slots `0..count-1` (the workspaces GNOME actually has).
+    Slots past the end of `workspaces_list` but still within `count` count as
+    free bare slots. Returns None when all `count` workspaces are taken.
+    """
+    for index, entry in enumerate(workspaces_list[:count]):
         if entry.type != "static" and entry.ref is None:
             return index
+    if len(workspaces_list) < count:
+        return len(workspaces_list)
     return None
 
 
 def create_task_workspace(
-    name: str, description: str | None = None, ref: str | None = None
-) -> TaskCreateResult:
+    name: str,
+    description: str | None = None,
+    ref: str | None = None,
+    *,
+    confirm_grow: Callable[[int], bool] = lambda count: False,
+) -> TaskCreateResult | None:
     """Allocate a free workspace slot for a new task, name it, and switch to it.
 
-    Picks the first non-`static` slot with no `ref`, growing the
-    configured workspace list if none is free — including bumping
-    `max_workspaces` itself when the current cap has already been
-    reached, so `et jira start` never fails for lack of room. Saves the
-    updated config, creates the slot's Tracker timer, renames the GNOME
-    workspaces to match, switches the active GNOME workspace to the new
-    slot, and best-effort moves the currently focused window (typically
-    the terminal the command was run from) there too — this last step is
-    skipped without failing the whole command if unsupported (e.g. for
-    native Wayland clients, which have no addressable X11 window for
-    `wmctrl` to move); `TaskCreateResult.window_moved` reports whether it
-    worked.
+    Picks the first non-`static`, unlinked slot among the fixed set of GNOME
+    workspaces (`num-workspaces`). If every workspace is already taken, calls
+    `confirm_grow(count)`; when it returns True the workspace count is bumped
+    by one (via `set_workspace_count`) and the new slot is used, otherwise
+    this returns `None` without changing anything. Saves the updated config,
+    creates the slot's Tracker timer, renames the GNOME workspaces to match,
+    switches the active GNOME workspace to the new slot, and best-effort moves
+    the currently focused window (typically the terminal the command was run
+    from) there too — this last step is skipped without failing the whole
+    command if unsupported (e.g. for native Wayland clients, which have no
+    addressable X11 window for `wmctrl` to move); `TaskCreateResult.window_moved`
+    reports whether it worked.
 
     Raises `ConfigError` if the config file is missing/malformed, and
     `WorkspaceError`/`TrackerError` (via `TaskError`) if the underlying
     GNOME/Tracker operations fail.
     """
     config: EtConfig = load_config()
-    workspaces_list = list(config.workspaces)
 
-    slot = _find_free_slot(workspaces_list)
-    while slot is None and len(workspaces_list) < config.max_workspaces:
-        workspaces_list.append(default_entry(len(workspaces_list), "dynamic"))
-        slot = _find_free_slot(workspaces_list)
+    try:
+        count = workspaces.get_workspace_count()
+    except WorkspaceError as exc:
+        raise TaskError(str(exc)) from exc
 
+    slot = _find_free_slot(config.workspaces, count)
+    grew = False
     if slot is None:
-        # Every configured slot up to max_workspaces is taken (static, or
-        # already linked to a task): grow the cap by one bare slot rather
-        # than failing.
-        slot = len(workspaces_list)
-        workspaces_list.append(default_entry(slot, "dynamic"))
+        if not confirm_grow(count):
+            return None
+        slot = count
+        grew = True
 
-    new_max_workspaces = max(config.max_workspaces, len(workspaces_list))
+    workspaces_list = list(config.workspaces)
+    while len(workspaces_list) <= slot:
+        workspaces_list.append(default_entry(len(workspaces_list), "dynamic"))
 
     workspaces_list[slot] = WorkspaceConfigEntry(
         name=name,
@@ -123,13 +136,10 @@ def create_task_workspace(
     )
 
     try:
-        workspaces.configure_static_workspace_count(
-            max(len(workspaces_list), new_max_workspaces)
-        )
+        if grew:
+            workspaces.set_workspace_count(count + 1)
         timer_created = tracker.add_tracker_for_workspace(slot)[1]
-        save_config(
-            replace(config, max_workspaces=new_max_workspaces, workspaces=workspaces_list)
-        )
+        save_config(replace(config, workspaces=workspaces_list))
         workspaces.rename_all_workspaces([entry.name for entry in workspaces_list])
         workspaces.switch_to_workspace(slot)
     except (WorkspaceError, TrackerError, ConfigError) as exc:
@@ -182,6 +192,7 @@ def _transition_to_in_progress(jira_config: JiraConfig, issue_key: str) -> None:
 def create_task_from_jira(
     select_issue: Callable[[list[JiraIssue]], JiraIssue | None],
     confirm_transition: Callable[[JiraIssue], bool] | None = None,
+    confirm_grow: Callable[[int], bool] = lambda count: False,
 ) -> TaskCreateResult | None:
     """Create a task workspace from one of the user's active Jira issues.
 
@@ -195,6 +206,10 @@ def create_task_from_jira(
     is given, calls `confirm_transition(issue)` — if it returns `True`, the
     issue is moved to its "In Progress" transition before the workspace is
     created.
+
+    `confirm_grow(count)` is forwarded to `create_task_workspace`: it's
+    called only when all `count` workspaces are taken, to ask whether to add
+    one more (returning `None` here if declined).
 
     Raises `ConfigError` if the config file is missing/malformed,
     `TaskError` if there's no `jira` config block, and `JiraError` (via
@@ -234,6 +249,7 @@ def create_task_from_jira(
         name=truncate_summary(issue.summary),
         description=issue.summary,
         ref=f"{JIRA_REF_PREFIX}{issue.key}",
+        confirm_grow=confirm_grow,
     )
 
 

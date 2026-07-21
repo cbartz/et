@@ -76,15 +76,16 @@ et ws delete                # delete the active workspace, shifting later ones l
 et ws delete --force        # same, even if still linked to a Jira issue (tracker is lost)
 ```
 
-`et ws delete` shrinks the managed workspace pool by one. It only works on a
+`et ws delete` frees a workspace slot. It only works on a
 "free" workspace — not `static`, and not linked to a Jira issue (run `et
 jira complete` first if it still is). Every non-`static` workspace after the
 deleted one (and its Tracker timer) shifts one slot to the left to close the
-gap, `max_workspaces` is decremented by one, and GNOME's actual workspace
-count shrinks to match. Refuses to delete the last remaining workspace.
-`--force` bypasses the Jira-linked check for assigned/in-progress
-workspaces — its Tracker timer is discarded rather than logged, so log the
-time first if you need it (`--force` never bypasses the `static` check).
+gap, leaving the freed bare `ET-<n>` slot at the end of the pool. GNOME's
+workspace count is left unchanged — you manage that yourself (see
+[Configuration](#configuration)). `--force` bypasses the Jira-linked check
+for assigned/in-progress workspaces — its Tracker timer is discarded rather
+than logged, so log the time first if you need it (`--force` never bypasses
+the `static` check).
 
 ### Tasks
 
@@ -106,9 +107,10 @@ timer is currently running) — but only when the active workspace is part
 of the managed (non-`static`) pool; otherwise it shows this help text.
 
 `et jira start` allocates the first free (non-`static`, unlinked) workspace
-slot — growing the configured workspace list if none is free, bumping
-`max_workspaces` itself if every existing slot is already taken, so it
-never fails for lack of room — creates its `ET-<n>` Tracker timer, and
+slot from the fixed pool of GNOME workspaces. If every workspace is already
+taken, it asks whether to add one more (bumping GNOME's `num-workspaces` by
+one) — decline and the command cancels without changing anything. It then
+creates the slot's `ET-<n>` Tracker timer, and
 switches GNOME to it, best-effort moving the terminal window it was run
 from along with it (via `wmctrl -r :ACTIVE:`) so it doesn't get left
 behind on the old workspace. That last step needs an addressable X11
@@ -143,9 +145,6 @@ jira start` — instead of leaving a gap in the middle of your workspaces.
 `ET_CONFIG_DIR` environment variable). Example:
 
 ```yaml
-# Capacity cap for workspace slots. Optional (default 10).
-max_workspaces: 10
-
 # Jira Cloud REST credentials + query. Required for `et jira start`
 # (Jira-issue picking), `et jira log-time`, and `et jira complete`.
 jira:
@@ -170,9 +169,15 @@ Per-entry keys: `name` (required), `type` (`dynamic` (default) or `static`),
 `ref` (e.g. `jira:ISD-321`), and `description`. The config file is written
 with mode `0600` because it may contain a Jira API token.
 
-> **Note:** `et jira start` switches GNOME to a *fixed* number of
-> workspaces (`org.gnome.mutter dynamic-workspaces = false`) so the
-> `ET-<n>` slots always exist. This is a global GNOME setting change.
+> **Note:** `et` requires a *fixed* number of GNOME workspaces
+> (`org.gnome.mutter dynamic-workspaces = false`) so the `ET-<n>` slots
+> always exist. If dynamic workspaces are enabled, `et` exits with
+> instructions to disable them and pick a workspace count:
+>
+> ```bash
+> gsettings set org.gnome.mutter dynamic-workspaces false
+> gsettings set org.gnome.desktop.wm.preferences num-workspaces <N>
+> ```
 
 > **Known limitation:** `et jira start` applies its changes (Tracker
 > timers, then config, then GNOME workspace names) sequentially without a

@@ -100,15 +100,34 @@ def set_workspace_names(names: list[str]) -> None:
         raise WorkspaceError(str(exc)) from exc
 
 
-def configure_static_workspace_count(count: int) -> None:
-    """Switch GNOME to a fixed number of workspaces, disabling dynamic workspaces.
+def is_dynamic_workspaces_enabled() -> bool:
+    """Return whether GNOME is set to grow/shrink workspaces dynamically.
 
-    By default GNOME grows/shrinks the number of workspaces on demand
-    (`dynamic-workspaces=true`). This disables that and pins the workspace
-    count to exactly `count`, so workspaces 0..count-1 always exist.
+    et requires a fixed set of workspaces, so this reads `org.gnome.mutter
+    dynamic-workspaces` to let callers verify the user has disabled it.
     """
     try:
-        gsettings.set_boolean(MUTTER_SCHEMA, DYNAMIC_WORKSPACES_KEY, False)
+        return gsettings.read_boolean(MUTTER_SCHEMA, DYNAMIC_WORKSPACES_KEY)
+    except GSettingsError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def get_workspace_count() -> int:
+    """Return the number of fixed GNOME workspaces (`num-workspaces`)."""
+    try:
+        return gsettings.read_int(WORKSPACE_NAMES_SCHEMA, NUM_WORKSPACES_KEY)
+    except GSettingsError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def set_workspace_count(count: int) -> None:
+    """Set the number of fixed GNOME workspaces (`num-workspaces`) to `count`.
+
+    Only touches the workspace count, not `dynamic-workspaces` — disabling
+    dynamic workspaces is the user's responsibility (verified separately via
+    `is_dynamic_workspaces_enabled`).
+    """
+    try:
         gsettings.set_int(WORKSPACE_NAMES_SCHEMA, NUM_WORKSPACES_KEY, count)
     except GSettingsError as exc:
         raise WorkspaceError(str(exc)) from exc

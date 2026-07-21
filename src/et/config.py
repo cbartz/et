@@ -1,12 +1,11 @@
 """Loading and saving et's configuration file (`~/.config/et/config.yaml`).
 
 Holds the "workspaces" list (name/type/ref/description per managed GNOME
-workspace, used by `et ws rename --all` and `et jira start`), the "jira"
+workspace, used by `et ws rename --all` and `et jira start`) and the "jira"
 block (Jira Cloud API credentials and query, also used by `et jira
-log-time` to log worklogs), and "max_workspaces" (the capacity cap used by
-`et jira start`'s slot-growth logic). Has no Typer/CLI dependency so
-callers can unit test without touching the real filesystem (via the
-`ET_CONFIG_DIR` environment variable override).
+log-time` to log worklogs). Has no Typer/CLI dependency so callers can unit
+test without touching the real filesystem (via the `ET_CONFIG_DIR`
+environment variable override).
 """
 
 
@@ -21,7 +20,6 @@ import yaml
 CONFIG_DIR_ENV_VAR = "ET_CONFIG_DIR"
 CONFIG_FILE_NAME = "config.yaml"
 
-DEFAULT_MAX_WORKSPACES = 10
 DEFAULT_PRIORITY_ORDER = ["Highest", "High", "Medium", "Low", "Lowest"]
 VALID_WORKSPACE_TYPES = ("dynamic", "static")
 
@@ -55,7 +53,6 @@ class WorkspaceConfigEntry:
 class EtConfig:
     """The full parsed contents of `~/.config/et/config.yaml`."""
 
-    max_workspaces: int
     jira: JiraConfig | None
     workspaces: list[WorkspaceConfigEntry]
 
@@ -146,8 +143,7 @@ def load_config() -> EtConfig:
 
     Raises ConfigError if the file doesn't exist, can't be read, isn't
     valid YAML, or doesn't match the expected schema. Missing optional keys
-    (`max_workspaces`, `jira`, `workspaces`) default to `10`, `None`, and
-    `[]` respectively.
+    (`jira`, `workspaces`) default to `None` and `[]` respectively.
     """
     path = get_config_path()
     if not path.is_file():
@@ -171,14 +167,10 @@ def load_config() -> EtConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"config file {path} must contain a mapping at the top level")
 
-    max_workspaces = data.get("max_workspaces", DEFAULT_MAX_WORKSPACES)
-    if not isinstance(max_workspaces, int) or isinstance(max_workspaces, bool):
-        raise ConfigError(f"config file {path}: 'max_workspaces' must be an integer")
-
     jira_config = _parse_jira_block(data.get("jira"), path)
     workspace_entries = _parse_workspaces(data.get("workspaces", []), path)
 
-    return EtConfig(max_workspaces=max_workspaces, jira=jira_config, workspaces=workspace_entries)
+    return EtConfig(jira=jira_config, workspaces=workspace_entries)
 
 
 def save_config(config: EtConfig) -> None:
@@ -186,7 +178,7 @@ def save_config(config: EtConfig) -> None:
 
     The file is chmod'd 0o600 since it may contain a Jira API token.
     """
-    data: dict[str, object] = {"max_workspaces": config.max_workspaces}
+    data: dict[str, object] = {}
 
     if config.jira is not None:
         data["jira"] = {
@@ -214,12 +206,6 @@ def save_config(config: EtConfig) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False))
     path.chmod(0o600)
 
-
-def get_max_workspaces() -> int:
-    """Return `max_workspaces` from the config file, or the default if none exists."""
-    if not get_config_path().is_file():
-        return DEFAULT_MAX_WORKSPACES
-    return load_config().max_workspaces
 
 
 def load_workspace_names() -> list[str]:

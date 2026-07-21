@@ -99,3 +99,42 @@ def set_boolean(schema: str, key: str, value: bool, schema_dir: str | None = Non
 def set_int(schema: str, key: str, value: int, schema_dir: str | None = None) -> None:
     """Write an integer value to `schema`'s `key`."""
     _set_raw(schema, key, str(value), schema_dir=schema_dir)
+
+
+def _get_raw(schema: str, key: str, schema_dir: str | None = None) -> str:
+    """Return the raw, stripped stdout of `gsettings get schema key`."""
+    _require_binary("gsettings")
+    result = subprocess.run(
+        ["gsettings", "get", schema, key],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_build_env(schema_dir),
+    )
+    if result.returncode != 0:
+        raise GSettingsError(f"gsettings get failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def read_boolean(schema: str, key: str, schema_dir: str | None = None) -> bool:
+    """Return the current boolean value of `schema`'s `key`."""
+    raw = _get_raw(schema, key, schema_dir=schema_dir)
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    raise GSettingsError(f"unexpected {schema} {key} boolean value: {raw!r}")
+
+
+def read_int(schema: str, key: str, schema_dir: str | None = None) -> int:
+    """Return the current integer value of `schema`'s `key`.
+
+    Tolerates GVariant type-annotated output (e.g. "uint32 4") by taking the
+    trailing token.
+    """
+    raw = _get_raw(schema, key, schema_dir=schema_dir)
+    token = raw.split()[-1] if raw else raw
+    try:
+        return int(token)
+    except ValueError as exc:
+        raise GSettingsError(f"could not parse {schema} {key} value: {raw!r}") from exc

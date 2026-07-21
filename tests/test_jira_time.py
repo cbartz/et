@@ -17,7 +17,6 @@ def _config(
     workspaces: list[WorkspaceConfigEntry] | None = None, *, with_jira: bool = True
 ) -> EtConfig:
     return EtConfig(
-        max_workspaces=10,
         jira=(
             JiraConfig(
                 base_url="https://example.atlassian.net/",

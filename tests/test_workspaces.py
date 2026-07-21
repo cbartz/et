@@ -10,12 +10,14 @@ import pytest
 from et.gsettings import GSettingsError
 from et.workspaces import (
     WorkspaceError,
-    configure_static_workspace_count,
     get_active_workspace_index,
+    get_workspace_count,
     get_workspace_names,
+    is_dynamic_workspaces_enabled,
     move_active_window_to_workspace,
     rename_active_workspace,
     rename_all_workspaces,
+    set_workspace_count,
     set_workspace_names,
     switch_to_workspace,
 )
@@ -104,23 +106,44 @@ def test_rename_active_workspace_replaces_existing_name(
     mock_set_names.assert_called_once_with(["a", "focus", "c"])
 
 
+@patch("et.workspaces.gsettings.read_boolean", return_value=True)
+def test_is_dynamic_workspaces_enabled_reads_mutter_setting(mock_read_boolean):
+    assert is_dynamic_workspaces_enabled() is True
+    mock_read_boolean.assert_called_once_with("org.gnome.mutter", "dynamic-workspaces")
+
+
+@patch("et.workspaces.gsettings.read_boolean", side_effect=GSettingsError("boom"))
+def test_is_dynamic_workspaces_enabled_wraps_gsettings_error(mock_read_boolean):
+    with pytest.raises(WorkspaceError, match="boom"):
+        is_dynamic_workspaces_enabled()
+
+
+@patch("et.workspaces.gsettings.read_int", return_value=4)
+def test_get_workspace_count_reads_num_workspaces(mock_read_int):
+    assert get_workspace_count() == 4
+    mock_read_int.assert_called_once_with(
+        "org.gnome.desktop.wm.preferences", "num-workspaces"
+    )
+
+
+@patch("et.workspaces.gsettings.read_int", side_effect=GSettingsError("boom"))
+def test_get_workspace_count_wraps_gsettings_error(mock_read_int):
+    with pytest.raises(WorkspaceError, match="boom"):
+        get_workspace_count()
+
+
 @patch("et.workspaces.gsettings.set_int")
-@patch("et.workspaces.gsettings.set_boolean")
-def test_configure_static_workspace_count_disables_dynamic_and_sets_count(
-    mock_set_boolean, mock_set_int
-):
-    configure_static_workspace_count(10)
-    mock_set_boolean.assert_called_once_with("org.gnome.mutter", "dynamic-workspaces", False)
+def test_set_workspace_count_sets_num_workspaces_only(mock_set_int):
+    set_workspace_count(7)
     mock_set_int.assert_called_once_with(
-        "org.gnome.desktop.wm.preferences", "num-workspaces", 10
+        "org.gnome.desktop.wm.preferences", "num-workspaces", 7
     )
 
 
 @patch("et.workspaces.gsettings.set_int", side_effect=GSettingsError("boom"))
-@patch("et.workspaces.gsettings.set_boolean")
-def test_configure_static_workspace_count_wraps_gsettings_error(mock_set_boolean, mock_set_int):
+def test_set_workspace_count_wraps_gsettings_error(mock_set_int):
     with pytest.raises(WorkspaceError, match="boom"):
-        configure_static_workspace_count(10)
+        set_workspace_count(7)
 
 
 @patch("et.workspaces.set_workspace_names")
