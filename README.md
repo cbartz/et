@@ -35,6 +35,29 @@ log time against them.
 
 Python **3.12+** is required.
 
+### Recommended: show workspace names in the switcher
+
+Since `et` names your workspaces after tasks/Jira issues, it helps to see
+those names in GNOME's workspace switcher popup. Install the
+[**Workspace Switcher Manager**](https://extensions.gnome.org/extension/4788/workspace-switcher-manager/)
+extension (`workspace-switcher-manager@G-dH.github.com`), then configure it
+to display the workspace name (it shows only the index/app name by default):
+
+```bash
+S=org.gnome.shell.extensions.workspace-switcher-manager
+gsettings set $S active-show-ws-name true       # show the name on the active workspace
+gsettings set $S inactive-show-ws-name true     # ...and on the others
+gsettings set $S active-show-app-name false     # drop the focused-app name
+gsettings set $S inactive-show-app-name false
+gsettings set $S popup-width-scale 200          # widen the popup so names fit
+```
+
+The workspace index stays visible (`active-show-ws-index`, on by default).
+The rest is personal taste — you can also tweak the popup position
+(`horizontal`/`vertical`), corner radius (`popup-radius-scale`), on-screen
+time (`on-screen-time`), and font size (`font-scale`) from the extension's
+preferences.
+
 ## Installation
 
 This project uses [uv](https://docs.astral.sh/uv/):
