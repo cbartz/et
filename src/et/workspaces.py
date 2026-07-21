@@ -66,6 +66,24 @@ def switch_to_workspace(index: int) -> None:
         raise WorkspaceError(f"wmctrl -s {index} failed: {result.stderr.strip()}")
 
 
+def move_active_window_to_workspace(index: int) -> None:
+    """Move the currently focused window to the workspace at 0-based `index`.
+
+    Lets a terminal running e.g. `et jira start` follow along to the
+    workspace it just switched to, instead of being left behind on the
+    workspace it was invoked from.
+    """
+    _require_binary("wmctrl")
+    result = subprocess.run(
+        ["wmctrl", "-r", ":ACTIVE:", "-t", str(index)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise WorkspaceError(f"wmctrl -r :ACTIVE: -t {index} failed: {result.stderr.strip()}")
+
+
 def get_workspace_names() -> list[str]:
     """Return the current list of GNOME workspace names."""
     try:

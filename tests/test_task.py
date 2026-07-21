@@ -44,6 +44,7 @@ def _config(
 # --- create_task_workspace -------------------------------------------------
 
 
+@patch("et.task.workspaces.move_active_window_to_workspace")
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
@@ -57,6 +58,7 @@ def test_create_task_workspace_uses_first_free_slot(
     mock_save_config,
     mock_rename_all,
     mock_switch,
+    mock_move,
 ):
     mock_load_config.return_value = _config(
         [
@@ -79,8 +81,10 @@ def test_create_task_workspace_uses_first_free_slot(
     )
     mock_rename_all.assert_called_once_with(["ET-1", "my-task"])
     mock_switch.assert_called_once_with(1)
+    mock_move.assert_called_once_with(1)
 
 
+@patch("et.task.workspaces.move_active_window_to_workspace")
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
@@ -94,6 +98,7 @@ def test_create_task_workspace_grows_list_when_no_free_slot(
     mock_save_config,
     mock_rename_all,
     mock_switch,
+    mock_move,
 ):
     mock_load_config.return_value = _config(
         [
@@ -110,6 +115,7 @@ def test_create_task_workspace_grows_list_when_no_free_slot(
     mock_add_tracker.assert_called_once_with(2)
 
 
+@patch("et.task.workspaces.move_active_window_to_workspace")
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
@@ -123,6 +129,7 @@ def test_create_task_workspace_grows_max_workspaces_when_capacity_reached(
     mock_save_config,
     _mock_rename_all,
     _mock_switch,
+    _mock_move,
 ):
     mock_load_config.return_value = _config(
         [

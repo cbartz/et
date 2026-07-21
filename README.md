@@ -109,7 +109,9 @@ of the managed (non-`static`) pool; otherwise it shows this help text.
 slot — growing the configured workspace list if none is free, bumping
 `max_workspaces` itself if every existing slot is already taken, so it
 never fails for lack of room — creates its `ET-<n>` Tracker timer, and
-switches GNOME to it. It lists your active Jira issues that aren't already
+switches GNOME to it, moving the terminal window it was run from along
+with it (via `wmctrl -r :ACTIVE:`), so it doesn't get left behind on the
+old workspace. It lists your active Jira issues that aren't already
 linked to a workspace, lets you pick one, and links the new workspace to
 it. If the selected issue isn't already "In Progress", it asks whether to
 move it there (showing its current status) and does so via Jira's

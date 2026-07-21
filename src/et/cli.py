@@ -230,7 +230,9 @@ def jira_start() -> None:
     name/description and its key is linked). If the selected issue isn't
     already "In Progress", offers to move it there. Growing the workspace
     pool never fails for lack of room: `et jira start` bumps
-    `max_workspaces` itself if every existing slot is already taken.
+    `max_workspaces` itself if every existing slot is already taken. The
+    terminal window `et jira start` was run from is moved along to the
+    new workspace, so it doesn't get left behind.
     """
     try:
         config = load_config()

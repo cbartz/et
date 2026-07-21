@@ -4,8 +4,9 @@ layer on top of the Tracker and Jira integrations (`et.tracker`,
 
 `et jira start` allocates a free workspace slot (growing the configured
 list, and bumping `max_workspaces` itself if the current cap is already
-full), creates its Tracker timer, and switches GNOME to it, picking the
-slot's name/description/Jira link from the user's active Jira issues (and
+full), creates its Tracker timer, and switches GNOME to it — moving the
+terminal window it's run from along with it — picking the slot's
+name/description/Jira link from the user's active Jira issues (and
 offering to move the selected issue to "In Progress" if it isn't
 already). `et jira complete` logs the active workspace's tracked time to
 Jira (reusing `et.jira_time.log_time_for_current_workspace`), resets that
@@ -84,8 +85,9 @@ def create_task_workspace(
     `max_workspaces` itself when the current cap has already been
     reached, so `et jira start` never fails for lack of room. Saves the
     updated config, creates the slot's Tracker timer, renames the GNOME
-    workspaces to match, and switches the active GNOME workspace to the
-    new slot.
+    workspaces to match, switches the active GNOME workspace to the new
+    slot, and moves the currently focused window (typically the terminal
+    the command was run from) there too.
 
     Raises `ConfigError` if the config file is missing/malformed, and
     `WorkspaceError`/`TrackerError` (via `TaskError`) if the underlying
@@ -125,6 +127,7 @@ def create_task_workspace(
         )
         workspaces.rename_all_workspaces([entry.name for entry in workspaces_list])
         workspaces.switch_to_workspace(slot)
+        workspaces.move_active_window_to_workspace(slot)
     except (WorkspaceError, TrackerError, ConfigError) as exc:
         raise TaskError(str(exc)) from exc
 

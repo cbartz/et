@@ -13,6 +13,7 @@ from et.workspaces import (
     configure_static_workspace_count,
     get_active_workspace_index,
     get_workspace_names,
+    move_active_window_to_workspace,
     rename_active_workspace,
     rename_all_workspaces,
     set_workspace_names,
@@ -168,3 +169,27 @@ def test_switch_to_workspace_raises_on_failure(mock_run, _mock_which):
 def test_switch_to_workspace_raises_when_wmctrl_missing(_mock_which):
     with pytest.raises(WorkspaceError, match="wmctrl"):
         switch_to_workspace(0)
+
+
+@patch("et.workspaces.shutil.which", return_value="/usr/bin/wmctrl")
+@patch("et.workspaces.subprocess.run")
+def test_move_active_window_to_workspace_calls_wmctrl_move(mock_run, _mock_which):
+    mock_run.return_value = _completed()
+    move_active_window_to_workspace(3)
+    mock_run.assert_called_once_with(
+        ["wmctrl", "-r", ":ACTIVE:", "-t", "3"], capture_output=True, text=True, check=False
+    )
+
+
+@patch("et.workspaces.shutil.which", return_value="/usr/bin/wmctrl")
+@patch("et.workspaces.subprocess.run")
+def test_move_active_window_to_workspace_raises_on_failure(mock_run, _mock_which):
+    mock_run.return_value = _completed(stderr="no such window", returncode=1)
+    with pytest.raises(WorkspaceError, match="no such window"):
+        move_active_window_to_workspace(3)
+
+
+@patch("et.workspaces.shutil.which", return_value=None)
+def test_move_active_window_to_workspace_raises_when_wmctrl_missing(_mock_which):
+    with pytest.raises(WorkspaceError, match="wmctrl"):
+        move_active_window_to_workspace(0)
