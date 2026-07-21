@@ -1,6 +1,6 @@
 """Orchestrates non-trivial `et ws` commands (currently just `et ws delete`).
 
-`shift_workspaces_left` is also reused by `et.task` (`et task complete`'s
+`shift_workspaces_left` is also reused by `et.task` (`et jira complete`'s
 "shift everything after the freed slot left, instead of leaving a gap"
 logic), which is why it lives here rather than directly in `et.workspaces`
 (which has no config/tracker dependency). Has no Typer/CLI dependency.
@@ -108,14 +108,14 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
     """Delete the active workspace's slot, shifting later ones left to fill the gap.
 
     Only works on a "free" workspace — non-`static`, and with no Jira `ref`
-    linked (the same definition `et task create` uses to find an empty
+    linked (the same definition `et jira start` uses to find an empty
     slot to reuse). Raises `WsDeleteError` if the active workspace is
-    `static`; use `et task complete` (or `et task log-time`) first to free
+    `static`; use `et jira complete` (or `et jira log-time`) first to free
     a Jira-linked workspace, or pass `force=True` to delete it anyway
     (its Tracker timer, if any, is discarded rather than logged).
 
     Every non-static workspace after the active one (and its Tracker
-    timer) is shifted one slot to the left, same as `et task complete`,
+    timer) is shifted one slot to the left, same as `et jira complete`,
     then the now-bare last slot is removed entirely: `max_workspaces` is
     decremented by 1 and GNOME's actual workspace count is shrunk to
     match. Switches to whichever workspace now occupies the deleted slot's

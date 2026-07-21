@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from et.config import ConfigError, EtConfig, JiraConfig, WorkspaceConfigEntry
-from et.jira import JiraError, JiraIssue
+from et.jira import JiraError, JiraIssue, JiraTransition
 from et.jira_time import JiraLogTimeError, LogTimeResult
 from et.task import (
     TaskError,
@@ -179,8 +179,10 @@ def test_create_task_workspace_wraps_config_error(
 # --- create_task_from_jira --------------------------------------------------
 
 
-def _issue(key: str, summary: str = "Some issue", priority: str = "High") -> JiraIssue:
-    return JiraIssue(key=key, summary=summary, priority=priority)
+def _issue(
+    key: str, summary: str = "Some issue", priority: str = "High", status: str = ""
+) -> JiraIssue:
+    return JiraIssue(key=key, summary=summary, priority=priority, status=status)
 
 
 @patch("et.task.load_config")
@@ -240,6 +242,106 @@ def test_create_task_from_jira_delegates_to_create_task_workspace(
         description="A rather long issue summary here",
         ref="jira:ISD-2",
     )
+
+
+@patch("et.task.create_task_workspace")
+@patch("et.task.fetch_active_issues")
+@patch("et.task.load_config")
+def test_create_task_from_jira_skips_confirm_transition_when_already_in_progress(
+    mock_load_config, mock_fetch, _mock_create_task_workspace
+):
+    mock_load_config.return_value = _config()
+    mock_fetch.return_value = [_issue("ISD-2", status="In Progress")]
+    confirm_transition = MagicMock()
+
+    create_task_from_jira(
+        select_issue=lambda issues: issues[0], confirm_transition=confirm_transition
+    )
+
+    confirm_transition.assert_not_called()
+
+
+@patch("et.task.transition_issue")
+@patch("et.task.fetch_transitions")
+@patch("et.task.create_task_workspace")
+@patch("et.task.fetch_active_issues")
+@patch("et.task.load_config")
+def test_create_task_from_jira_transitions_issue_when_confirmed(
+    mock_load_config,
+    mock_fetch,
+    _mock_create_task_workspace,
+    mock_fetch_transitions,
+    mock_transition_issue,
+):
+    mock_load_config.return_value = _config()
+    mock_fetch.return_value = [_issue("ISD-2", status="To Do")]
+    mock_fetch_transitions.return_value = [
+        JiraTransition(id="21", name="Done", to_status="Done"),
+        JiraTransition(id="11", name="Start progress", to_status="In Progress"),
+    ]
+
+    create_task_from_jira(
+        select_issue=lambda issues: issues[0], confirm_transition=lambda issue: True
+    )
+
+    mock_fetch_transitions.assert_called_once_with(_config().jira, "ISD-2")
+    mock_transition_issue.assert_called_once_with(_config().jira, "ISD-2", "11")
+
+
+@patch("et.task.transition_issue")
+@patch("et.task.fetch_transitions")
+@patch("et.task.create_task_workspace")
+@patch("et.task.fetch_active_issues")
+@patch("et.task.load_config")
+def test_create_task_from_jira_skips_transition_when_declined(
+    mock_load_config,
+    mock_fetch,
+    _mock_create_task_workspace,
+    mock_fetch_transitions,
+    mock_transition_issue,
+):
+    mock_load_config.return_value = _config()
+    mock_fetch.return_value = [_issue("ISD-2", status="To Do")]
+
+    create_task_from_jira(
+        select_issue=lambda issues: issues[0], confirm_transition=lambda issue: False
+    )
+
+    mock_fetch_transitions.assert_not_called()
+    mock_transition_issue.assert_not_called()
+
+
+@patch("et.task.fetch_transitions")
+@patch("et.task.create_task_workspace")
+@patch("et.task.fetch_active_issues")
+@patch("et.task.load_config")
+def test_create_task_from_jira_raises_when_no_in_progress_transition_available(
+    mock_load_config, mock_fetch, _mock_create_task_workspace, mock_fetch_transitions
+):
+    mock_load_config.return_value = _config()
+    mock_fetch.return_value = [_issue("ISD-2", status="To Do")]
+    mock_fetch_transitions.return_value = [JiraTransition(id="21", name="Done", to_status="Done")]
+
+    with pytest.raises(TaskError, match="no transition to 'In Progress' available"):
+        create_task_from_jira(
+            select_issue=lambda issues: issues[0], confirm_transition=lambda issue: True
+        )
+
+
+@patch("et.task.fetch_transitions", side_effect=JiraError("api down"))
+@patch("et.task.create_task_workspace")
+@patch("et.task.fetch_active_issues")
+@patch("et.task.load_config")
+def test_create_task_from_jira_wraps_fetch_transitions_error(
+    mock_load_config, mock_fetch, _mock_create_task_workspace, _mock_fetch_transitions
+):
+    mock_load_config.return_value = _config()
+    mock_fetch.return_value = [_issue("ISD-2", status="To Do")]
+
+    with pytest.raises(TaskError, match="api down"):
+        create_task_from_jira(
+            select_issue=lambda issues: issues[0], confirm_transition=lambda issue: True
+        )
 
 
 # --- complete_task_for_current_workspace ------------------------------------

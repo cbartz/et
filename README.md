@@ -8,13 +8,15 @@ log time against them.
 
 ## Features
 
+- **`et`** (no subcommand) — in a non-`static` workspace, shows the Jira
+  issue linked to it plus its tracked time; otherwise shows this help.
 - **`et ws rename`** — rename the active workspace (or all of them from config).
-- **`et ws info`** — show the Jira issue linked to the active workspace.
 - **`et ws delete`** — delete the active (free) workspace, shifting later ones left.
-- **`et task [create|info|log-time|complete]`** — a friendlier, task-centric
-  layer that creates a workspace + Tracker timer for a task (optionally
-  picked straight from your active Jira issues), shows its tracked time,
-  and completes it by logging that time to Jira and freeing the slot.
+- **`et jira [start|log-time|complete]`** — a friendlier, task-centric
+  layer that creates a workspace + Tracker timer for a task (picked
+  straight from your active Jira issues, optionally moving it to "In
+  Progress"), and completes it by logging its tracked time to Jira and
+  freeing the slot.
 
 ## Requirements
 
@@ -28,7 +30,7 @@ log time against them.
 - [`gnome-extensions`](https://manpages.ubuntu.com/manpages/en/man1/gnome-extensions.1.html)
   — reload the Tracker extension around timer writes.
 - The **Tracker** GNOME Shell extension (`tracker@aliakseiz.github.com`),
-  installed and enabled, for `et task`'s timer functionality.
+  installed and enabled, for `et jira`'s timer functionality.
 
 Python **3.12+** is required.
 
@@ -53,19 +55,28 @@ uv tool install .
 et --help
 ```
 
+Run bare (no subcommand) from a non-`static` workspace to see its linked
+Jira issue and tracked time at a glance:
+
+```bash
+et    # same output as `et jira log-time` would act on, without logging anything
+```
+
+From a `static` workspace, or one that isn't part of the managed pool, `et`
+falls back to the usual help text.
+
 ### Workspaces
 
 ```bash
 et ws rename focus          # rename the active workspace to "focus"
 et ws rename --all          # rename workspaces 0..n-1 from the config's "workspaces" list
-et ws info                  # show the Jira issue linked to the active workspace
 et ws delete                # delete the active workspace, shifting later ones left
 et ws delete --force        # same, even if still linked to a Jira issue (tracker is lost)
 ```
 
 `et ws delete` shrinks the managed workspace pool by one. It only works on a
-"free" workspace — not `static`, and not linked to a Jira issue (run `et task
-complete` first if it still is). Every non-`static` workspace after the
+"free" workspace — not `static`, and not linked to a Jira issue (run `et
+jira complete` first if it still is). Every non-`static` workspace after the
 deleted one (and its Tracker timer) shifts one slot to the left to close the
 gap, `max_workspaces` is decremented by one, and GNOME's actual workspace
 count shrinks to match. Refuses to delete the last remaining workspace.
@@ -75,49 +86,48 @@ time first if you need it (`--force` never bypasses the `static` check).
 
 ### Tasks
 
-`et task` wraps the workspace/Tracker/Jira integrations into a single
+`et jira` wraps the workspace/Tracker/Jira integrations into a single
 lifecycle for one task at a time — it doesn't replace `ws`, which keeps
 working exactly as before.
 
 ```bash
-et task info                                # same as `et ws info`, plus time spent
-et task create                              # pick from your active Jira issues (the default)
-et task create --manual                     # prompts for a name/description instead
-et task create isd-321 -d "Fix login bug" --manual   # or give them directly
-et task log-time                            # log the active workspace's tracked time to Jira
-et task complete                            # log time, then free the workspace
+et                                           # show the active task's Jira issue and time spent
+et jira start                                # pick an active Jira issue and start a task from it
+et jira log-time                             # log the active workspace's tracked time to Jira
+et jira complete                             # log time, then free the workspace
 ```
 
-`et task info` shows the same Jira issue details as `et ws info`, plus the
-elapsed time of the `ET-<n>` Tracker timer bound to the active workspace
-(e.g. `Time spent: 1h 12m 0s`, with `(running)` appended if the timer is
-currently running).
+`et` with no subcommand shows the same Jira issue details as before, plus
+the elapsed time of the `ET-<n>` Tracker timer bound to the active
+workspace (e.g. `Time spent: 1h 12m 0s`, with `(running)` appended if the
+timer is currently running) — but only when the active workspace is part
+of the managed (non-`static`) pool; otherwise it shows this help text.
 
-`et task create` allocates the first free (non-`static`, unlinked) workspace
+`et jira start` allocates the first free (non-`static`, unlinked) workspace
 slot — growing the configured workspace list if none is free, bumping
 `max_workspaces` itself if every existing slot is already taken, so it
 never fails for lack of room — creates its `ET-<n>` Tracker timer, and
-switches GNOME to it. By default (or with `--from-jira`) it lists your
-active Jira issues that aren't already linked to a workspace, lets you pick
-one, and links the new workspace to it. Pass `--manual` to name the
-workspace yourself instead (prompting for a name/description, or take them
-from `NAME`/`--description`).
+switches GNOME to it. It lists your active Jira issues that aren't already
+linked to a workspace, lets you pick one, and links the new workspace to
+it. If the selected issue isn't already "In Progress", it asks whether to
+move it there (showing its current status) and does so via Jira's
+transitions API if you confirm.
 
-`et task log-time` reads the elapsed time from the `ET-<n>` Tracker timer
+`et jira log-time` reads the elapsed time from the `ET-<n>` Tracker timer
 bound to the active workspace, resolves the Jira issue linked to that
-workspace (its `ref`, e.g. set by `et task create`), and logs it as a
+workspace (its `ref`, e.g. set by `et jira start`), and logs it as a
 worklog via Jira's own worklog API (no separate Tempo credential needed —
 worklogs created this way still show up in Tempo timesheets when Tempo is
 configured to sync native Jira worklogs). At least a minute of elapsed time
 is required. On success the tracker is reset to 0, unless `--no-reset` is
 given.
 
-`et task complete` logs the active workspace's tracked time to Jira (like
-`et task log-time`, no confirmation prompt) and then resets that workspace
+`et jira complete` logs the active workspace's tracked time to Jira (like
+`et jira log-time`, no confirmation prompt) and then resets that workspace
 back to a bare `ET-<n>` slot. Every non-`static` workspace after it is then
 shifted one slot to the left (its Tracker timer follows it), so the freed
 slot ends up at the end of the non-static range — ready for a future `et
-task create` — instead of leaving a gap in the middle of your workspaces.
+jira start` — instead of leaving a gap in the middle of your workspaces.
 
 ## Configuration
 
@@ -128,8 +138,8 @@ task create` — instead of leaving a gap in the middle of your workspaces.
 # Capacity cap for workspace slots. Optional (default 10).
 max_workspaces: 10
 
-# Jira Cloud REST credentials + query. Required for `et task create`
-# (Jira-issue picking), `et task log-time`, and `et task complete`.
+# Jira Cloud REST credentials + query. Required for `et jira start`
+# (Jira-issue picking), `et jira log-time`, and `et jira complete`.
 jira:
   base_url: https://your-org.atlassian.net
   email: you@example.com
@@ -138,11 +148,11 @@ jira:
   # Optional; controls sort order. Defaults to the list below.
   priority_order: [Highest, High, Medium, Low, Lowest]
 
-# Ordered workspace list used by `ws rename --all` and `et task create`.
+# Ordered workspace list used by `ws rename --all` and `et jira start`.
 workspaces:
   - name: mails
   - name: handson
-    type: static                    # "static" workspaces are never touched by `et task create`
+    type: static                    # "static" workspaces are never touched by `et jira start`
   - name: isd-321
     ref: jira:ISD-321               # links a workspace to a Jira issue
     description: Fix the login flow
@@ -152,14 +162,15 @@ Per-entry keys: `name` (required), `type` (`dynamic` (default) or `static`),
 `ref` (e.g. `jira:ISD-321`), and `description`. The config file is written
 with mode `0600` because it may contain a Jira API token.
 
-> **Note:** `et task create` switches GNOME to a *fixed* number of
+> **Note:** `et jira start` switches GNOME to a *fixed* number of
 > workspaces (`org.gnome.mutter dynamic-workspaces = false`) so the
 > `ET-<n>` slots always exist. This is a global GNOME setting change.
 
-> **Known limitation:** `et task create` applies its changes (Tracker
+> **Known limitation:** `et jira start` applies its changes (Tracker
 > timers, then config, then GNOME workspace names) sequentially without a
 > rollback. A failure partway through can leave the config and live GNOME
 > state temporarily out of sync; re-running the command reconciles them.
+
 
 ## Development
 

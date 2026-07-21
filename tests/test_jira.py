@@ -8,7 +8,14 @@ import pytest
 import requests
 
 from et.config import JiraConfig
-from et.jira import JiraError, JiraIssue, create_worklog, fetch_active_issues
+from et.jira import (
+    JiraError,
+    JiraIssue,
+    create_worklog,
+    fetch_active_issues,
+    fetch_transitions,
+    transition_issue,
+)
 
 
 def _config(**overrides: object) -> JiraConfig:
@@ -32,8 +39,11 @@ def _response(issues: list[dict], next_page_token: str | None = None) -> MagicMo
     return response
 
 
-def _issue(key: str, summary: str, priority: str) -> dict:
-    return {"key": key, "fields": {"summary": summary, "priority": {"name": priority}}}
+def _issue(key: str, summary: str, priority: str, status: str | None = None) -> dict:
+    fields: dict[str, object] = {"summary": summary, "priority": {"name": priority}}
+    if status is not None:
+        fields["status"] = {"name": status}
+    return {"key": key, "fields": fields}
 
 
 @patch("et.jira.requests.get")
@@ -61,7 +71,7 @@ def test_fetch_active_issues_passes_jql_and_basic_auth(mock_get):
 
     args, kwargs = mock_get.call_args
     assert args[0] == "https://example.atlassian.net/rest/api/3/search/jql"
-    assert kwargs["params"] == {"jql": config.jql, "fields": "summary,priority"}
+    assert kwargs["params"] == {"jql": config.jql, "fields": "summary,priority,status"}
     assert kwargs["auth"] == (config.email, config.pat)
 
 
@@ -146,6 +156,24 @@ def test_fetch_active_issues_respects_custom_priority_order(mock_get):
     assert [issue.key for issue in issues] == ["PROJ-2", "PROJ-1"]
 
 
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_includes_status(mock_get):
+    mock_get.return_value = _response([_issue("PROJ-1", "Task A", "High", status="In Progress")])
+
+    issues = fetch_active_issues(_config())
+
+    assert issues[0].status == "In Progress"
+
+
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_defaults_status_to_empty_string_when_missing(mock_get):
+    mock_get.return_value = _response([_issue("PROJ-1", "Task A", "High")])
+
+    issues = fetch_active_issues(_config())
+
+    assert issues[0].status == ""
+
+
 def _json_response(status_code: int, payload: object) -> MagicMock:
     response = MagicMock()
     response.status_code = status_code
@@ -209,4 +237,84 @@ def test_create_worklog_raises_on_non_2xx_status(mock_post):
 def test_create_worklog_wraps_network_errors(mock_post):
     with pytest.raises(JiraError, match="no route to host"):
         create_worklog(_config(), "PROJ-1", 780)
+
+
+# --- fetch_transitions / transition_issue -----------------------------------
+
+
+@patch("et.jira.requests.get")
+def test_fetch_transitions_parses_id_name_and_target_status(mock_get):
+    mock_get.return_value = _json_response(
+        200,
+        {
+            "transitions": [
+                {"id": "11", "name": "Start progress", "to": {"name": "In Progress"}},
+                {"id": "21", "name": "Done", "to": {"name": "Done"}},
+            ]
+        },
+    )
+
+    transitions = fetch_transitions(_config(base_url="https://example.atlassian.net"), "PROJ-1")
+
+    args, kwargs = mock_get.call_args
+    assert args[0] == "https://example.atlassian.net/rest/api/3/issue/PROJ-1/transitions"
+    assert kwargs["auth"] == (_config().email, _config().pat)
+    assert [(t.id, t.name, t.to_status) for t in transitions] == [
+        ("11", "Start progress", "In Progress"),
+        ("21", "Done", "Done"),
+    ]
+
+
+@patch("et.jira.requests.get")
+def test_fetch_transitions_skips_transitions_without_id(mock_get):
+    mock_get.return_value = _json_response(
+        200,
+        {"transitions": [{"name": "Broken", "to": {"name": "In Progress"}}]},
+    )
+
+    transitions = fetch_transitions(_config(), "PROJ-1")
+
+    assert transitions == []
+
+
+@patch("et.jira.requests.get")
+def test_fetch_transitions_raises_on_non_200_status(mock_get):
+    mock_get.return_value = _json_response(404, {"errorMessages": ["not found"]})
+
+    with pytest.raises(JiraError, match="404"):
+        fetch_transitions(_config(), "PROJ-1")
+
+
+@patch("et.jira.requests.get", side_effect=requests.ConnectionError("no route to host"))
+def test_fetch_transitions_wraps_network_errors(mock_get):
+    with pytest.raises(JiraError, match="no route to host"):
+        fetch_transitions(_config(), "PROJ-1")
+
+
+@patch("et.jira.requests.post")
+def test_transition_issue_posts_transition_id(mock_post):
+    mock_post.return_value = _json_response(204, {})
+    config = _config(base_url="https://example.atlassian.net")
+
+    transition_issue(config, "PROJ-1", "11")
+
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://example.atlassian.net/rest/api/3/issue/PROJ-1/transitions"
+    assert kwargs["json"] == {"transition": {"id": "11"}}
+    assert kwargs["auth"] == (config.email, config.pat)
+
+
+@patch("et.jira.requests.post")
+def test_transition_issue_raises_on_non_2xx_status(mock_post):
+    mock_post.return_value = _json_response(400, {"errorMessages": ["bad request"]})
+
+    with pytest.raises(JiraError, match="400"):
+        transition_issue(_config(), "PROJ-1", "11")
+
+
+@patch("et.jira.requests.post", side_effect=requests.ConnectionError("no route to host"))
+def test_transition_issue_wraps_network_errors(mock_post):
+    with pytest.raises(JiraError, match="no route to host"):
+        transition_issue(_config(), "PROJ-1", "11")
+
 

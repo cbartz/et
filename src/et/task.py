@@ -1,13 +1,13 @@
-"""Orchestrates the `et task` command group: a friendlier, task-centric
+"""Orchestrates the `et jira` command group: a friendlier, task-centric
 layer on top of the Tracker and Jira integrations (`et.tracker`,
 `et.jira`, `et.jira_sync`, `et.jira_time`), plus `et ws`.
 
-`et task create` allocates a free workspace slot (growing the configured
+`et jira start` allocates a free workspace slot (growing the configured
 list, and bumping `max_workspaces` itself if the current cap is already
-full), creates its Tracker timer, and switches GNOME to it — by default
-picking the slot's name/description/Jira link from the user's active Jira
-issues (`--from-jira`, the default; pass `--manual` to name it yourself
-instead). `et task complete` logs the active workspace's tracked time to
+full), creates its Tracker timer, and switches GNOME to it, picking the
+slot's name/description/Jira link from the user's active Jira issues (and
+offering to move the selected issue to "In Progress" if it isn't
+already). `et jira complete` logs the active workspace's tracked time to
 Jira (reusing `et.jira_time.log_time_for_current_workspace`), resets that
 workspace back to a bare "ET-<n>" slot, and shifts every non-`static`
 slot after it one slot to the left (moving each one's Tracker timer along
@@ -21,13 +21,28 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from et import tracker, workspaces
-from et.config import ConfigError, EtConfig, WorkspaceConfigEntry, load_config, save_config
-from et.jira import JiraError, JiraIssue, fetch_active_issues
+from et.config import (
+    ConfigError,
+    EtConfig,
+    JiraConfig,
+    WorkspaceConfigEntry,
+    load_config,
+    save_config,
+)
+from et.jira import (
+    JiraError,
+    JiraIssue,
+    fetch_active_issues,
+    fetch_transitions,
+    transition_issue,
+)
 from et.jira_sync import JIRA_REF_PREFIX, default_entry, jira_key_from_ref, truncate_summary
 from et.jira_time import LogTimeResult, log_time_for_current_workspace
 from et.tracker import TrackerError
 from et.workspaces import WorkspaceError
 from et.ws import shift_workspaces_left
+
+IN_PROGRESS_STATUS = "in progress"
 
 
 class TaskError(RuntimeError):
@@ -67,7 +82,7 @@ def create_task_workspace(
     Picks the first non-`static` slot with no `ref`, growing the
     configured workspace list if none is free — including bumping
     `max_workspaces` itself when the current cap has already been
-    reached, so `et task create` never fails for lack of room. Saves the
+    reached, so `et jira start` never fails for lack of room. Saves the
     updated config, creates the slot's Tracker timer, renames the GNOME
     workspaces to match, and switches the active GNOME workspace to the
     new slot.
@@ -117,8 +132,32 @@ def create_task_workspace(
 
 
 
+def _transition_to_in_progress(jira_config: JiraConfig, issue_key: str) -> None:
+    """Move `issue_key` to its "In Progress" transition, if one is available.
+
+    Raises `TaskError` if no such transition exists, or (via `JiraError`)
+    if the Jira API call fails.
+    """
+    try:
+        transitions = fetch_transitions(jira_config, issue_key)
+    except JiraError as exc:
+        raise TaskError(str(exc)) from exc
+
+    target = next(
+        (t for t in transitions if t.to_status.strip().lower() == IN_PROGRESS_STATUS), None
+    )
+    if target is None:
+        raise TaskError(f"no transition to 'In Progress' available for {issue_key}")
+
+    try:
+        transition_issue(jira_config, issue_key, target.id)
+    except JiraError as exc:
+        raise TaskError(str(exc)) from exc
+
+
 def create_task_from_jira(
     select_issue: Callable[[list[JiraIssue]], JiraIssue | None],
+    confirm_transition: Callable[[JiraIssue], bool] | None = None,
 ) -> TaskCreateResult | None:
     """Create a task workspace from one of the user's active Jira issues.
 
@@ -127,6 +166,11 @@ def create_task_from_jira(
     remaining ones — `select_issue` is responsible for presenting the
     choice to the user (and returns `None` to cancel, in which case this
     returns `None` without changing anything).
+
+    If the selected issue isn't already "In Progress" and `confirm_transition`
+    is given, calls `confirm_transition(issue)` — if it returns `True`, the
+    issue is moved to its "In Progress" transition before the workspace is
+    created.
 
     Raises `ConfigError` if the config file is missing/malformed,
     `TaskError` if there's no `jira` config block, and `JiraError` (via
@@ -154,6 +198,13 @@ def create_task_from_jira(
     issue = select_issue(candidates)
     if issue is None:
         return None
+
+    if (
+        issue.status.strip().lower() != IN_PROGRESS_STATUS
+        and confirm_transition is not None
+        and confirm_transition(issue)
+    ):
+        _transition_to_in_progress(config.jira, issue.key)
 
     return create_task_workspace(
         name=truncate_summary(issue.summary),

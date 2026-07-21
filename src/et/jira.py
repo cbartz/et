@@ -1,5 +1,5 @@
 """Client for Jira Cloud's REST API, used to fetch the user's active issues
-and (for `et task log-time`) to log work against an issue.
+and (for `et jira log-time`) to log work against an issue.
 
 Talks to Jira Cloud's `/rest/api/3/search/jql` endpoint (the old
 `/rest/api/3/search` endpoint was retired by Atlassian and now returns HTTP
@@ -21,6 +21,7 @@ from et.config import JiraConfig
 
 SEARCH_PATH = "rest/api/3/search/jql"
 WORKLOG_PATH_TEMPLATE = "rest/api/3/issue/{key}/worklog"
+TRANSITIONS_PATH_TEMPLATE = "rest/api/3/issue/{key}/transitions"
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,16 @@ class JiraIssue:
     key: str
     summary: str
     priority: str
+    status: str = ""
+
+
+@dataclass(frozen=True)
+class JiraTransition:
+    """One workflow transition available for an issue (from Jira's transitions API)."""
+
+    id: str
+    name: str
+    to_status: str
 
 
 def _text_comment(text: str) -> dict[str, object]:
@@ -97,7 +108,7 @@ def _fetch_issue_pages(jira_config: JiraConfig, url: str) -> list[object]:
     next_page_token: str | None = None
 
     while True:
-        params: dict[str, str] = {"jql": jira_config.jql, "fields": "summary,priority"}
+        params: dict[str, str] = {"jql": jira_config.jql, "fields": "summary,priority,status"}
         if next_page_token is not None:
             params["nextPageToken"] = next_page_token
 
@@ -156,11 +167,13 @@ def fetch_active_issues(jira_config: JiraConfig) -> list[JiraIssue]:
             continue
         fields = raw_issue.get("fields", {})
         priority_field = fields.get("priority") or {}
+        status_field = fields.get("status") or {}
         issues.append(
             JiraIssue(
                 key=key,
                 summary=fields.get("summary") or "",
                 priority=priority_field.get("name") or "",
+                status=status_field.get("name") or "",
             )
         )
 
@@ -178,3 +191,80 @@ def fetch_active_issues(jira_config: JiraConfig) -> list[JiraIssue]:
     indexed = list(enumerate(issues))
     indexed.sort(key=lambda pair: (rank.get(pair[1].priority, unranked), pair[0]))
     return [issue for _, issue in indexed]
+
+
+def fetch_transitions(jira_config: JiraConfig, issue_key: str) -> list[JiraTransition]:
+    """Fetch the workflow transitions currently available for `issue_key`.
+
+    Calls Jira's `GET /rest/api/3/issue/{key}/transitions` endpoint. Raises
+    `JiraError` if the request cannot be made or Jira rejects it.
+    """
+    url = jira_config.base_url.rstrip("/") + "/" + TRANSITIONS_PATH_TEMPLATE.format(key=issue_key)
+
+    try:
+        response = requests.get(
+            url,
+            auth=(jira_config.email, jira_config.pat),
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise JiraError(f"could not reach Jira at {url}: {exc}") from exc
+
+    if response.status_code != 200:
+        raise JiraError(
+            f"Jira API request to {url} failed with status {response.status_code}: "
+            f"{response.text.strip()[:500]}"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise JiraError(f"could not parse Jira API response as JSON: {exc}") from exc
+
+    transitions_raw = payload.get("transitions") if isinstance(payload, dict) else None
+    if not isinstance(transitions_raw, list):
+        raise JiraError(f"unexpected Jira API response from {url}: no 'transitions' list")
+
+    transitions: list[JiraTransition] = []
+    for raw_transition in transitions_raw:
+        if not isinstance(raw_transition, dict):
+            continue
+        transition_id = raw_transition.get("id")
+        if not isinstance(transition_id, str) or not transition_id:
+            continue
+        to_field = raw_transition.get("to") or {}
+        transitions.append(
+            JiraTransition(
+                id=transition_id,
+                name=raw_transition.get("name") or "",
+                to_status=to_field.get("name") or "",
+            )
+        )
+
+    return transitions
+
+
+def transition_issue(jira_config: JiraConfig, issue_key: str, transition_id: str) -> None:
+    """Move `issue_key` through the workflow transition identified by `transition_id`.
+
+    Calls Jira's `POST /rest/api/3/issue/{key}/transitions` endpoint (which
+    returns 204 No Content on success). Raises `JiraError` if the request
+    cannot be made or Jira rejects it.
+    """
+    url = jira_config.base_url.rstrip("/") + "/" + TRANSITIONS_PATH_TEMPLATE.format(key=issue_key)
+
+    try:
+        response = requests.post(
+            url,
+            json={"transition": {"id": transition_id}},
+            auth=(jira_config.email, jira_config.pat),
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise JiraError(f"could not reach Jira at {url}: {exc}") from exc
+
+    if response.status_code not in (200, 204):
+        raise JiraError(
+            f"Jira API request to {url} failed with status {response.status_code}: "
+            f"{response.text.strip()[:500]}"
+        )

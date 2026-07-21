@@ -15,7 +15,6 @@ from et.task import (
     TaskError,
     complete_task_for_current_workspace,
     create_task_from_jira,
-    create_task_workspace,
 )
 from et.tracker import TrackerError, find_timer_for_workspace, format_duration, load_timers
 from et.workspaces import (
@@ -45,23 +44,51 @@ def _hyperlink(text: str, url: str) -> str:
 
 app = typer.Typer(
     help="et: a small CLI for tracking effort and managing your workspace.",
-    no_args_is_help=True,
+    no_args_is_help=False,
 )
 ws_app = typer.Typer(help="Interact with GNOME/Ubuntu workspaces.", no_args_is_help=True)
 app.add_typer(ws_app, name="ws")
 
-task_app = typer.Typer(
+jira_app = typer.Typer(
     help="Convenience layer around ws (plus the Tracker/Jira integrations) for a single "
     "task's lifecycle.",
     no_args_is_help=True,
 )
-app.add_typer(task_app, name="task")
+app.add_typer(jira_app, name="jira")
 
 
-@app.callback()
-def _configure_logging() -> None:
-    """Send library warnings (e.g. from et.jira) to stderr."""
+@app.callback(invoke_without_command=True)
+def _root(ctx: typer.Context) -> None:
+    """Send library warnings (e.g. from et.jira) to stderr.
+
+    With no subcommand, shows the same info as `et jira log-time` would
+    act on (the Jira issue and tracked time for the active workspace) when
+    that workspace is part of the managed (non-`static`) pool; otherwise
+    falls back to the regular help text.
+    """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+    if ctx.invoked_subcommand is not None:
+        return
+
+    try:
+        index = get_active_workspace_index()
+        config = load_config()
+    except (ConfigError, WorkspaceError):
+        typer.echo(ctx.get_help())
+        raise typer.Exit() from None
+
+    entry = config.workspaces[index] if index < len(config.workspaces) else None
+    if entry is None or entry.type == "static":
+        typer.echo(ctx.get_help())
+        raise typer.Exit()
+
+    _print_workspace_jira_info(index, config)
+    try:
+        _print_workspace_time_spent(index)
+    except TrackerError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
 
 
 @ws_app.command("rename")
@@ -138,19 +165,6 @@ def _print_workspace_time_spent(index: int) -> None:
     typer.echo(f"Time spent: {format_duration(seconds)}{running}")
 
 
-@ws_app.command("info")
-def info() -> None:
-    """Show the Jira issue (description + link) linked to the active workspace, if any."""
-    try:
-        index = get_active_workspace_index()
-        config = load_config()
-    except (ConfigError, WorkspaceError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
-    _print_workspace_jira_info(index, config)
-
-
 @ws_app.command("delete")
 def ws_delete(
     force: bool = typer.Option(
@@ -162,7 +176,7 @@ def ws_delete(
     """Delete the active workspace, shifting later workspaces left to fill the gap.
 
     Only works when the active workspace is free (not `static`, and not
-    linked to a Jira issue) — use `et task complete` (or `et jira
+    linked to a Jira issue) — use `et jira complete` (or `et jira
     log-time`) first if it's still tracking something, or pass `--force`
     to delete it anyway (its Tracker timer, if any, is discarded rather
     than logged). Every non-static workspace after it (and its Tracker
@@ -189,128 +203,70 @@ def _print_task_created(result: TaskCreateResult) -> None:
     typer.echo(f"Switched to workspace {result.workspace_index + 1}")
 
 
-@task_app.command("info")
-def task_info() -> None:
-    """Show the Jira issue and tracked time for the active task's workspace.
+@jira_app.command("start")
+def jira_start() -> None:
+    """Start a new task: allocate a workspace slot, its Tracker timer, and switch to it.
 
-    Same as `et ws info`, plus the elapsed time of the ET-<n> Tracker timer
-    bound to the active workspace (if any).
+    Lists your active Jira issues that aren't already linked to a
+    workspace and lets you pick one (its summary becomes the workspace
+    name/description and its key is linked). If the selected issue isn't
+    already "In Progress", offers to move it there. Growing the workspace
+    pool never fails for lack of room: `et jira start` bumps
+    `max_workspaces` itself if every existing slot is already taken.
     """
     try:
-        index = get_active_workspace_index()
         config = load_config()
-    except (ConfigError, WorkspaceError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+    except ConfigError:
+        config = None
+    base_url = config.jira.base_url.rstrip("/") if config and config.jira else ""
 
-    _print_workspace_jira_info(index, config)
+    def select_issue(issues: list[JiraIssue]) -> JiraIssue | None:
+        if not issues:
+            typer.echo("No active Jira issues available to start a task from.")
+            return None
 
-    try:
-        _print_workspace_time_spent(index)
-    except TrackerError as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+        typer.echo("Active issues not yet linked to a workspace:")
+        for position, issue in enumerate(issues, start=1):
+            key_display = (
+                _hyperlink(issue.key, f"{base_url}/browse/{issue.key}")
+                if base_url
+                else issue.key
+            )
+            status_display = f" ({issue.status})" if issue.status else ""
+            typer.echo(
+                f"  {position}. {key_display} [{issue.priority}]{status_display} {issue.summary}"
+            )
 
-
-@task_app.command("create")
-def task_create(
-    name: str | None = typer.Argument(
-        None, help="Name for the new task's workspace (--manual only; prompted for if omitted)."
-    ),
-    description: str | None = typer.Option(
-        None, "--description", "-d", help="Optional description for the new task (--manual only)."
-    ),
-    manual: bool = typer.Option(
-        False, "--manual", help="Name the task yourself instead of picking a Jira issue."
-    ),
-    from_jira: bool = typer.Option(
-        False,
-        "--from-jira",
-        help="Pick an active Jira issue to create the task from (the default).",
-    ),
-) -> None:
-    """Create a new task: allocate a workspace slot, its Tracker timer, and switch to it.
-
-    Growing the workspace pool never fails for lack of room: `et task
-    create` bumps `max_workspaces` itself if every existing slot is
-    already taken.
-
-    By default (or with --from-jira), lists your active Jira issues that
-    aren't already linked to a workspace and lets you pick one (its
-    summary becomes the workspace name/description and its key is
-    linked). With --manual, prompts interactively for a name/description
-    when not given as arguments/options instead.
-    """
-    if manual and from_jira:
-        typer.echo("Error: --manual and --from-jira are mutually exclusive", err=True)
-        raise typer.Exit(code=1)
-
-    if not manual and (name is not None or description is not None):
-        typer.echo("Error: NAME/--description require --manual", err=True)
-        raise typer.Exit(code=1)
-
-    if not manual:
+        choice = typer.prompt("Pick an issue number (or 0 to cancel)", default="0")
         try:
-            config = load_config()
-        except ConfigError:
-            config = None
-        base_url = config.jira.base_url.rstrip("/") if config and config.jira else ""
+            selected = int(choice)
+        except ValueError:
+            selected = 0
+        if selected < 1 or selected > len(issues):
+            return None
+        return issues[selected - 1]
 
-        def select_issue(issues: list[JiraIssue]) -> JiraIssue | None:
-            if not issues:
-                typer.echo("No active Jira issues available to create a task from.")
-                return None
-
-            typer.echo("Active issues not yet linked to a workspace:")
-            for position, issue in enumerate(issues, start=1):
-                key_display = (
-                    _hyperlink(issue.key, f"{base_url}/browse/{issue.key}")
-                    if base_url
-                    else issue.key
-                )
-                typer.echo(f"  {position}. {key_display} [{issue.priority}] {issue.summary}")
-
-            choice = typer.prompt("Pick an issue number (or 0 to cancel)", default="0")
-            try:
-                selected = int(choice)
-            except ValueError:
-                selected = 0
-            if selected < 1 or selected > len(issues):
-                return None
-            return issues[selected - 1]
-
-        try:
-            from_jira_result = create_task_from_jira(select_issue)
-        except (ConfigError, TaskError) as error:
-            typer.echo(f"Error: {error}", err=True)
-            raise typer.Exit(code=1) from error
-
-        if from_jira_result is None:
-            typer.echo("Cancelled.")
-            return
-
-        _print_task_created(from_jira_result)
-        return
-
-    if name is None:
-        name = typer.prompt("Task name")
-    if description is None:
-        description = (
-            typer.prompt("Description (optional)", default="", show_default=False) or None
+    def confirm_transition(issue: JiraIssue) -> bool:
+        status_display = issue.status or "an unknown state"
+        return typer.confirm(
+            f"{issue.key} is currently '{status_display}'. Move it to 'In Progress'?"
         )
 
     try:
-        result = create_task_workspace(name, description=description)
+        result = create_task_from_jira(select_issue, confirm_transition)
     except (ConfigError, TaskError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
+    if result is None:
+        typer.echo("Cancelled.")
+        return
+
     _print_task_created(result)
 
 
-
-@task_app.command("log-time")
-def task_log_time(
+@jira_app.command("log-time")
+def jira_log_time(
     comment: str | None = typer.Option(
         None, "--comment", "-m", help="Worklog description/comment to attach in Jira."
     ),
@@ -323,11 +279,11 @@ def task_log_time(
     """Log the active task's tracked time to its Jira issue.
 
     Reads the elapsed time from the ET-<n> Tracker timer bound to the
-    active workspace, resolves the Jira issue linked to that workspace
-    (see `et ws info`), and logs it as a Jira worklog for that issue (via
-    Jira's own worklog API, which also shows up in Tempo timesheets when
-    Tempo is configured to sync native Jira worklogs). The tracker is
-    reset to 0 afterwards, unless --no-reset is given.
+    active workspace, resolves the Jira issue linked to that workspace,
+    and logs it as a Jira worklog for that issue (via Jira's own worklog
+    API, which also shows up in Tempo timesheets when Tempo is configured
+    to sync native Jira worklogs). The tracker is reset to 0 afterwards,
+    unless --no-reset is given.
     """
     try:
         result = log_time_for_current_workspace(description=comment, reset=not no_reset)
@@ -343,17 +299,17 @@ def task_log_time(
         typer.echo("Reset tracker to 0")
 
 
-@task_app.command("complete")
-def task_complete(
+@jira_app.command("complete")
+def jira_complete(
     comment: str | None = typer.Option(
         None, "--comment", "-m", help="Worklog description/comment to attach in Jira."
     ),
 ) -> None:
     """Log the active task's tracked time to Jira, then free its workspace slot.
 
-    Equivalent to `et task log-time` followed by resetting the workspace's
+    Equivalent to `et jira log-time` followed by resetting the workspace's
     config entry back to a bare ET-<n> slot (clearing its name/ref/
-    description), freeing it for a future `et task create`. No confirmation
+    description), freeing it for a future `et jira start`. No confirmation
     prompt.
     """
     try:

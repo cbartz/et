@@ -1,9 +1,9 @@
-"""Orchestrates `et task log-time`: log the active workspace's Tracker time
+"""Orchestrates `et jira log-time`: log the active workspace's Tracker time
 to its linked Jira issue.
 
 Reads the ET-<n> Tracker timer bound to the active workspace, resolves the
 Jira issue linked to that workspace (its "jira:<KEY>" ref, normally set by
-`et task create`), and logs the elapsed time as a Jira worklog for that issue
+`et jira start`), and logs the elapsed time as a Jira worklog for that issue
 (via `et.jira.create_worklog` — Jira's own worklog API, which still shows up
 in Tempo timesheets when Tempo is configured to sync native Jira worklogs,
 without needing a separate Tempo API token). On success the timer is reset
