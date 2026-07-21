@@ -12,7 +12,7 @@ from __future__ import annotations
 from et.config import WorkspaceConfigEntry
 
 JIRA_REF_PREFIX = "jira:"
-TRUNCATED_NAME_LENGTH = 20
+TRUNCATED_NAME_LENGTH = 30
 
 
 def truncate_summary(summary: str) -> str:

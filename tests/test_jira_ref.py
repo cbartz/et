@@ -5,11 +5,13 @@ from __future__ import annotations
 from et.jira_ref import default_entry, jira_key_from_ref, truncate_summary
 
 
-def test_truncate_summary_hard_cuts_at_20_chars_and_rstrips():
-    assert truncate_summary("Fix login timeout on mobile clients") == "Fix login timeout on"
+def test_truncate_summary_hard_cuts_at_30_chars_and_rstrips():
+    assert (
+        truncate_summary("Fix login timeout on mobile clients") == "Fix login timeout on mobile cl"
+    )
     assert truncate_summary("Short") == "Short"
-    assert truncate_summary("Exactly twenty chars") == "Exactly twenty chars"
-    assert truncate_summary("Trailing space      more text here") == "Trailing space"
+    assert truncate_summary("Exactly thirty characters here") == "Exactly thirty characters here"
+    assert truncate_summary("Trailing space trimmed off    tail") == "Trailing space trimmed off"
 
 
 def test_jira_key_from_ref_extracts_key_or_returns_none():

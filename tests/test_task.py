@@ -317,7 +317,7 @@ def test_create_task_from_jira_delegates_to_create_task_workspace(
 
     assert result == "created-result"
     mock_create_task_workspace.assert_called_once_with(
-        name="A rather long issue",
+        name="A rather long issue summary he",
         description="A rather long issue summary here",
         ref="jira:ISD-2",
         confirm_grow=confirm_grow,
