@@ -61,26 +61,44 @@ app.add_typer(jira_app, name="jira")
 def _root(ctx: typer.Context) -> None:
     """Send library warnings (e.g. from et.jira) to stderr.
 
-    With no subcommand, shows the same info as `et jira log-time` would
-    act on (the Jira issue and tracked time for the active workspace) when
-    that workspace is part of the managed (non-`static`) pool; otherwise
-    falls back to the regular help text.
+    With no subcommand, shows the same info as `et info` (and `et jira
+    log-time`) would act on (the Jira issue and tracked time for the
+    active workspace) when that workspace is part of the managed
+    (non-`static`) pool; otherwise falls back to the regular help text.
     """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
     if ctx.invoked_subcommand is not None:
         return
 
+    _show_active_workspace_info(ctx)
+
+
+@app.command("info")
+def info(ctx: typer.Context) -> None:
+    """Show the Jira issue and tracked time for the active workspace.
+
+    Explicit equivalent of running `et` with no subcommand: shows the
+    active workspace's linked Jira issue and tracked time when it's part
+    of the managed (non-`static`) pool, otherwise falls back to the
+    regular help text.
+    """
+    _show_active_workspace_info(ctx)
+
+
+def _show_active_workspace_info(ctx: typer.Context) -> None:
+    """Print the active workspace's Jira info + tracked time, or fall back to help."""
+    root_ctx = ctx.find_root()
     try:
         index = get_active_workspace_index()
         config = load_config()
     except (ConfigError, WorkspaceError):
-        typer.echo(ctx.get_help())
+        typer.echo(root_ctx.get_help())
         raise typer.Exit() from None
 
     entry = config.workspaces[index] if index < len(config.workspaces) else None
     if entry is None or entry.type == "static":
-        typer.echo(ctx.get_help())
+        typer.echo(root_ctx.get_help())
         raise typer.Exit()
 
     _print_workspace_jira_info(index, config)

@@ -164,6 +164,44 @@ def test_bare_invocation_reports_tracker_error(mock_load_config, mock_index, _mo
     assert "Error: no schema" in result.output
 
 
+@patch("et.cli.load_timers", return_value=[])
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_info_command_shows_jira_info_and_time_spent_for_non_static_workspace(
+    mock_load_config, mock_index, _mock_load_timers
+):
+    mock_index.return_value = 0
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(
+                name="Fix login timeout",
+                ref="jira:PROJ-1",
+                description="Fix login timeout on mobile clients",
+            ),
+        ]
+    )
+
+    with patch("sys.stdout.isatty", return_value=False):
+        result = runner.invoke(app, ["info"])
+
+    assert result.exit_code == 0
+    assert "Workspace 1: Fix login timeout" in result.stdout
+    assert "jira:PROJ-1" in result.stdout
+
+
+@patch("et.cli.get_active_workspace_index")
+@patch("et.cli.load_config")
+def test_info_command_shows_full_app_help_when_workspace_is_static(mock_load_config, mock_index):
+    mock_index.return_value = 0
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="mails", type="static")])
+
+    result = runner.invoke(app, ["info"])
+
+    assert result.exit_code == 0
+    # Falls back to the top-level app help, not just the `info` subcommand's own usage.
+    assert "Interact with GNOME/Ubuntu workspaces." in result.stdout
+
+
 @patch("et.cli.delete_active_workspace")
 def test_ws_delete_reports_summary(mock_delete):
     from et.ws import WsDeleteResult

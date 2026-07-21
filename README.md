@@ -8,8 +8,9 @@ log time against them.
 
 ## Features
 
-- **`et`** (no subcommand) — in a non-`static` workspace, shows the Jira
-  issue linked to it plus its tracked time; otherwise shows this help.
+- **`et`** (no subcommand) / **`et info`** — in a non-`static` workspace,
+  shows the Jira issue linked to it plus its tracked time; otherwise shows
+  this help.
 - **`et ws rename`** — rename the active workspace (or all of them from config).
 - **`et ws delete`** — delete the active (free) workspace, shifting later ones left.
 - **`et jira [start|log-time|complete]`** — a friendlier, task-centric
@@ -55,15 +56,16 @@ uv tool install .
 et --help
 ```
 
-Run bare (no subcommand) from a non-`static` workspace to see its linked
-Jira issue and tracked time at a glance:
+Run bare (no subcommand), or `et info` explicitly, from a non-`static`
+workspace to see its linked Jira issue and tracked time at a glance:
 
 ```bash
-et    # same output as `et jira log-time` would act on, without logging anything
+et         # same output as `et jira log-time` would act on, without logging anything
+et info    # explicit, named equivalent of the above
 ```
 
-From a `static` workspace, or one that isn't part of the managed pool, `et`
-falls back to the usual help text.
+From a `static` workspace, or one that isn't part of the managed pool,
+both fall back to the usual help text.
 
 ### Workspaces
 
@@ -91,7 +93,7 @@ lifecycle for one task at a time — it doesn't replace `ws`, which keeps
 working exactly as before.
 
 ```bash
-et                                           # show the active task's Jira issue and time spent
+et info                                      # (or bare `et`) show the active task's Jira issue and time spent
 et jira start                                # pick an active Jira issue and start a task from it
 et jira log-time                             # log the active workspace's tracked time to Jira
 et jira complete                             # log time, then free the workspace
