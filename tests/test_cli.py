@@ -180,6 +180,31 @@ def test_ws_info_reports_error_when_active_workspace_lookup_fails(mock_load_conf
     assert "Error: wmctrl not found" in result.output
 
 
+@patch("et.cli.delete_active_workspace")
+def test_ws_delete_reports_summary(mock_delete):
+    from et.ws import WsDeleteResult
+
+    mock_delete.return_value = WsDeleteResult(workspace_index=1, remaining_workspaces=4)
+
+    result = runner.invoke(app, ["ws", "delete"])
+
+    assert result.exit_code == 0
+    assert "Deleted workspace 2" in result.stdout
+    assert "Now managing 4 workspaces" in result.stdout
+
+
+@patch("et.cli.delete_active_workspace")
+def test_ws_delete_reports_error(mock_delete):
+    from et.ws import WsDeleteError
+
+    mock_delete.side_effect = WsDeleteError("workspace 1 is linked to ISD-1; complete it first")
+
+    result = runner.invoke(app, ["ws", "delete"])
+
+    assert result.exit_code == 1
+    assert "Error: workspace 1 is linked to ISD-1; complete it first" in result.output
+
+
 @patch("et.cli.reset_tracker_for_current_workspace", return_value=(0, "ET-1"))
 def test_tracker_reset_current_workspace_reports_reset_timer(mock_reset):
     result = runner.invoke(app, ["tracker", "reset"])

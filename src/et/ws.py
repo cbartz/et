@@ -1,0 +1,180 @@
+"""Orchestrates non-trivial `et ws` commands (currently just `et ws delete`).
+
+`shift_workspaces_left` is also reused by `et.task` (`et task complete`'s
+"shift everything after the freed slot left, instead of leaving a gap"
+logic), which is why it lives here rather than directly in `et.workspaces`
+(which has no config/tracker dependency). Has no Typer/CLI dependency.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+
+from et import tracker, workspaces
+from et.config import ConfigError, EtConfig, WorkspaceConfigEntry, load_config, save_config
+from et.jira_sync import default_entry, jira_key_from_ref
+from et.tracker import TimerEntry, TrackerError, find_timer_for_workspace
+from et.workspaces import WorkspaceError
+
+
+class WsDeleteError(RuntimeError):
+    """Raised when the active workspace cannot be deleted."""
+
+
+@dataclass(frozen=True)
+class WsDeleteResult:
+    """Summary of what `delete_active_workspace` did."""
+
+    workspace_index: int
+    remaining_workspaces: int
+
+
+def shift_workspaces_left(
+    workspaces_list: list[WorkspaceConfigEntry], entries: list[TimerEntry], freed_index: int
+) -> bool:
+    """Shift every non-`static` slot after `freed_index` one slot to the left.
+
+    `freed_index` (already reset to a bare "ET-<n>" entry by the caller) is
+    filled with whatever was in the next non-static slot, that slot is
+    filled with the one after it, and so on, leaving a single bare slot at
+    the *end* of the non-static range instead of a gap in the middle. Each
+    moved workspace's bound Tracker timer (if any) follows it — its
+    `workspaceId`/`name` are updated in place — and a stale timer left
+    behind at `freed_index` (e.g. the just-reset-to-zero timer of a task
+    that was just completed, or an already-deleted workspace's leftover
+    timer) is discarded rather than duplicated.
+
+    Mutates `workspaces_list` and `entries` in place. Returns whether
+    `entries` changed (so the caller knows whether to save it). No-op if
+    `freed_index` isn't a non-static slot, or is already the last one.
+    """
+    non_static_slots = [i for i, entry in enumerate(workspaces_list) if entry.type != "static"]
+    if freed_index not in non_static_slots:
+        return False
+
+    freed_position = non_static_slots.index(freed_index)
+    timers_changed = False
+
+    for position in range(freed_position, len(non_static_slots) - 1):
+        dst = non_static_slots[position]
+        src = non_static_slots[position + 1]
+
+        source_entry = workspaces_list[src]
+        if source_entry == default_entry(src, source_entry.type):
+            # Bare placeholder slot (e.g. one padded in by `et ws delete` for
+            # an implicit slot): moving it verbatim would carry its stale
+            # "ET-<src+1>" name into `dst`, so give `dst` a fresh, correctly
+            # numbered placeholder instead of copying the source's content.
+            workspaces_list[dst] = default_entry(dst, workspaces_list[dst].type)
+        else:
+            workspaces_list[dst] = WorkspaceConfigEntry(
+                name=source_entry.name,
+                type=workspaces_list[dst].type,
+                ref=source_entry.ref,
+                description=source_entry.description,
+            )
+        workspaces_list[src] = default_entry(src, workspaces_list[src].type)
+
+        existing_at_dst = find_timer_for_workspace(entries, dst)
+        if existing_at_dst is not None:
+            entries.remove(existing_at_dst)
+            timers_changed = True
+
+        moved_timer = find_timer_for_workspace(entries, src)
+        if moved_timer is not None:
+            moved_timer["workspaceId"] = dst
+            moved_timer["name"] = f"ET-{dst + 1}"
+            timers_changed = True
+
+    return timers_changed
+
+
+def _trim_trailing_default_entries(workspaces_list: list[WorkspaceConfigEntry]) -> None:
+    """Drop trailing bare "ET-<n>" entries (mutating in place).
+
+    A trailing bare, unlinked, dynamic entry is indistinguishable from a
+    slot that was never listed in the config at all (every other command
+    already treats a missing entry the same as a bare one), so trimming
+    them back off keeps the saved config from growing forever just because
+    it was padded out for a shift/delete.
+    """
+    while workspaces_list and workspaces_list[-1] == default_entry(
+        len(workspaces_list) - 1, workspaces_list[-1].type
+    ):
+        workspaces_list.pop()
+
+
+def delete_active_workspace() -> WsDeleteResult:
+    """Delete the active workspace's slot, shifting later ones left to fill the gap.
+
+    Only works on a "free" workspace — non-`static`, and with no Jira `ref`
+    linked (the same definition `et task create` uses to find an empty
+    slot to reuse). Raises `WsDeleteError` if the active workspace is
+    `static` or still linked to an issue; use `et task complete` (or `et
+    jira log-time`) first to free it.
+
+    Every non-static workspace after the active one (and its Tracker
+    timer) is shifted one slot to the left, same as `et task complete`,
+    then the now-bare last slot is removed entirely: `max_workspaces` is
+    decremented by 1 and GNOME's actual workspace count is shrunk to
+    match. Switches to whichever workspace now occupies the deleted slot's
+    old position (or the new last workspace, if the deleted slot was the
+    last one).
+
+    Raises `ConfigError` if the config file is missing/malformed,
+    `WorkspaceError` (unwrapped) if the active workspace can't be
+    determined, and `WsDeleteError` if the checks above fail or the
+    underlying GNOME/Tracker operations fail.
+    """
+    config: EtConfig = load_config()
+    if config.max_workspaces <= 1:
+        raise WsDeleteError("cannot delete the last remaining workspace")
+
+    index = workspaces.get_active_workspace_index()
+
+    padded_len = max(len(config.workspaces), config.max_workspaces, index + 1)
+    workspaces_list = list(config.workspaces) + [
+        default_entry(slot, "dynamic") for slot in range(len(config.workspaces), padded_len)
+    ]
+
+    entry = workspaces_list[index]
+    if entry.type == "static":
+        raise WsDeleteError(f"workspace {index + 1} is a static workspace and can't be deleted")
+    if entry.ref is not None:
+        key = jira_key_from_ref(entry.ref) or entry.ref
+        raise WsDeleteError(
+            f"workspace {index + 1} is linked to {key}; complete or unlink it first"
+        )
+
+    try:
+        entries = tracker.load_timers()
+    except TrackerError as exc:
+        raise WsDeleteError(str(exc)) from exc
+
+    timers_changed = shift_workspaces_left(workspaces_list, entries, index)
+    workspaces_list.pop()
+    new_max_workspaces = config.max_workspaces - 1
+    _trim_trailing_default_entries(workspaces_list)
+
+    try:
+        if timers_changed:
+            tracker.save_timers_with_reload(entries, "shifting timers after deleting a workspace")
+        new_total = max(len(workspaces_list), new_max_workspaces)
+        workspaces.configure_static_workspace_count(new_total)
+        save_config(
+            replace(config, max_workspaces=new_max_workspaces, workspaces=workspaces_list)
+        )
+        workspaces.rename_all_workspaces([item.name for item in workspaces_list])
+        workspaces.switch_to_workspace(min(index, new_total - 1))
+    except (ConfigError, WorkspaceError, TrackerError) as exc:
+        raise WsDeleteError(str(exc)) from exc
+
+    return WsDeleteResult(workspace_index=index, remaining_workspaces=new_max_workspaces)
+
+
+__all__ = [
+    "WsDeleteError",
+    "WsDeleteResult",
+    "shift_workspaces_left",
+    "delete_active_workspace",
+]

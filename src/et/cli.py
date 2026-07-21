@@ -35,6 +35,7 @@ from et.workspaces import (
     rename_active_workspace,
     rename_all_workspaces,
 )
+from et.ws import WsDeleteError, delete_active_workspace
 
 if TYPE_CHECKING:
     from et.config import EtConfig
@@ -189,6 +190,27 @@ def info() -> None:
         raise typer.Exit(code=1) from error
 
     _print_workspace_jira_info(index, config)
+
+
+@ws_app.command("delete")
+def ws_delete() -> None:
+    """Delete the active workspace, shifting later workspaces left to fill the gap.
+
+    Only works when the active workspace is free (not `static`, and not
+    linked to a Jira issue) — use `et task complete` (or `et jira
+    log-time`) first if it's still tracking something. Every non-static
+    workspace after it (and its Tracker timer) shifts one slot to the
+    left, then the now-freed last slot is removed entirely: `max_workspaces`
+    is decremented by 1 and GNOME's actual workspace count shrinks to match.
+    """
+    try:
+        result = delete_active_workspace()
+    except (ConfigError, WorkspaceError, WsDeleteError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo(f"Deleted workspace {result.workspace_index + 1}")
+    typer.echo(f"Now managing {result.remaining_workspaces} workspaces")
 
 
 @tracker_app.command("add")

@@ -25,8 +25,9 @@ from et.config import ConfigError, EtConfig, WorkspaceConfigEntry, load_config, 
 from et.jira import JiraError, JiraIssue, fetch_active_issues
 from et.jira_sync import JIRA_REF_PREFIX, default_entry, jira_key_from_ref, truncate_summary
 from et.jira_time import LogTimeResult, log_time_for_current_workspace
-from et.tracker import TimerEntry, TrackerError, find_timer_for_workspace
+from et.tracker import TrackerError
 from et.workspaces import WorkspaceError
+from et.ws import shift_workspaces_left
 
 
 class TaskError(RuntimeError):
@@ -56,58 +57,6 @@ def _find_free_slot(workspaces_list: list[WorkspaceConfigEntry]) -> int | None:
         if entry.type != "static" and entry.ref is None:
             return index
     return None
-
-
-def _shift_workspaces_left(
-    workspaces_list: list[WorkspaceConfigEntry], entries: list[TimerEntry], freed_index: int
-) -> bool:
-    """Shift every non-`static` slot after `freed_index` one slot to the left.
-
-    `freed_index` (already reset to a bare "ET-<n>" entry by the caller) is
-    filled with whatever was in the next non-static slot, that slot is
-    filled with the one after it, and so on, leaving a single bare slot at
-    the *end* of the non-static range instead of a gap in the middle. Each
-    moved workspace's bound Tracker timer (if any) follows it — its
-    `workspaceId`/`name` are updated in place — and a stale timer left
-    behind at `freed_index` (e.g. the just-reset-to-zero timer of the task
-    that was just completed) is discarded rather than duplicated.
-
-    Mutates `workspaces_list` and `entries` in place. Returns whether
-    `entries` changed (so the caller knows whether to save it). No-op if
-    `freed_index` isn't a non-static slot, or is already the last one.
-    """
-    non_static_slots = [i for i, entry in enumerate(workspaces_list) if entry.type != "static"]
-    if freed_index not in non_static_slots:
-        return False
-
-    freed_position = non_static_slots.index(freed_index)
-    timers_changed = False
-
-    for position in range(freed_position, len(non_static_slots) - 1):
-        dst = non_static_slots[position]
-        src = non_static_slots[position + 1]
-
-        source_entry = workspaces_list[src]
-        workspaces_list[dst] = WorkspaceConfigEntry(
-            name=source_entry.name,
-            type=workspaces_list[dst].type,
-            ref=source_entry.ref,
-            description=source_entry.description,
-        )
-        workspaces_list[src] = default_entry(src, workspaces_list[src].type)
-
-        existing_at_dst = find_timer_for_workspace(entries, dst)
-        if existing_at_dst is not None:
-            entries.remove(existing_at_dst)
-            timers_changed = True
-
-        moved_timer = find_timer_for_workspace(entries, src)
-        if moved_timer is not None:
-            moved_timer["workspaceId"] = dst
-            moved_timer["name"] = f"ET-{dst + 1}"
-            timers_changed = True
-
-    return timers_changed
 
 
 def create_task_workspace(
@@ -231,7 +180,7 @@ def complete_task_for_current_workspace(comment: str | None = None) -> TaskCompl
 
     try:
         entries = tracker.load_timers()
-        timers_changed = _shift_workspaces_left(workspaces_list, entries, index)
+        timers_changed = shift_workspaces_left(workspaces_list, entries, index)
         if timers_changed:
             tracker.save_timers_with_reload(entries, "shifting timers after completing a task")
         save_config(replace(config, workspaces=workspaces_list))
