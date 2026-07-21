@@ -227,12 +227,25 @@ def test_create_task_from_jira_delegates_to_create_task_workspace(
 # --- complete_task_for_current_workspace ------------------------------------
 
 
+def _timer(workspace_id: int, name: str, elapsed: int = 0, running: bool = False) -> dict:
+    return {
+        "id": f"timer-{workspace_id}",
+        "name": name,
+        "timeElapsed": elapsed,
+        "running": running,
+        "selected": False,
+        "workspaceId": workspace_id,
+        "autoResume": True,
+    }
+
+
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
+@patch("et.task.tracker.load_timers", return_value=[])
 @patch("et.task.load_config")
 @patch("et.task.log_time_for_current_workspace")
 def test_complete_task_resets_workspace_after_logging(
-    mock_log_time, mock_load_config, mock_save_config, mock_rename_all
+    mock_log_time, mock_load_config, _mock_load_timers, mock_save_config, mock_rename_all
 ):
     mock_log_time.return_value = LogTimeResult(
         workspace_index=1, issue_key="ISD-2", seconds_logged=780, tracker_reset=True
@@ -254,6 +267,115 @@ def test_complete_task_resets_workspace_after_logging(
     mock_rename_all.assert_called_once_with(["ET-1", "ET-2"])
 
 
+@patch("et.task.workspaces.rename_all_workspaces")
+@patch("et.task.save_config")
+@patch("et.task.tracker.save_timers_with_reload")
+@patch("et.task.tracker.load_timers")
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_shifts_later_workspaces_and_timers_left(
+    mock_log_time,
+    mock_load_config,
+    mock_load_timers,
+    mock_save_timers,
+    mock_save_config,
+    mock_rename_all,
+):
+    # Completing task B (slot 1) should pull C (slot 2, with its timer) into
+    # slot 1, and leave slot 2 as the new bare slot — instead of leaving a
+    # B-shaped gap in the middle.
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=1, issue_key="ISD-B", seconds_logged=780, tracker_reset=True
+    )
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+            WorkspaceConfigEntry(name="ISD-B", ref="jira:ISD-B", description="stuff"),
+            WorkspaceConfigEntry(name="ISD-C", ref="jira:ISD-C", description="more stuff"),
+        ]
+    )
+    stale_b_timer = _timer(1, "ET-2", elapsed=0)
+    c_timer = _timer(2, "ET-3", elapsed=999, running=True)
+    mock_load_timers.return_value = [stale_b_timer, c_timer]
+
+    result = complete_task_for_current_workspace()
+
+    assert result.log_result.issue_key == "ISD-B"
+
+    saved_config = mock_save_config.call_args[0][0]
+    assert saved_config.workspaces == [
+        WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+        WorkspaceConfigEntry(name="ISD-C", ref="jira:ISD-C", description="more stuff"),
+        WorkspaceConfigEntry(name="ET-3"),
+    ]
+    mock_rename_all.assert_called_once_with(["ISD-A", "ISD-C", "ET-3"])
+
+    saved_timers = mock_save_timers.call_args[0][0]
+    assert stale_b_timer not in saved_timers
+    assert c_timer in saved_timers
+    assert c_timer["workspaceId"] == 1
+    assert c_timer["name"] == "ET-2"
+    assert c_timer["timeElapsed"] == 999
+
+
+@patch("et.task.workspaces.rename_all_workspaces")
+@patch("et.task.save_config")
+@patch("et.task.tracker.save_timers_with_reload")
+@patch("et.task.tracker.load_timers", return_value=[])
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_is_noop_shift_when_last_slot_completed(
+    mock_log_time, mock_load_config, _mock_load_timers, mock_save_timers, mock_save_config, _rename
+):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=1, issue_key="ISD-B", seconds_logged=780, tracker_reset=True
+    )
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+            WorkspaceConfigEntry(name="ISD-B", ref="jira:ISD-B"),
+        ]
+    )
+
+    complete_task_for_current_workspace()
+
+    saved_config = mock_save_config.call_args[0][0]
+    assert saved_config.workspaces == [
+        WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+        WorkspaceConfigEntry(name="ET-2"),
+    ]
+    mock_save_timers.assert_not_called()
+
+
+@patch("et.task.workspaces.rename_all_workspaces")
+@patch("et.task.save_config")
+@patch("et.task.tracker.load_timers", return_value=[])
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_does_not_shift_static_slots(
+    mock_log_time, mock_load_config, _mock_load_timers, mock_save_config, mock_rename_all
+):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=0, issue_key="ISD-A", seconds_logged=780, tracker_reset=True
+    )
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+            WorkspaceConfigEntry(name="mails", type="static"),
+            WorkspaceConfigEntry(name="ISD-C", ref="jira:ISD-C"),
+        ]
+    )
+
+    complete_task_for_current_workspace()
+
+    saved_config = mock_save_config.call_args[0][0]
+    assert saved_config.workspaces == [
+        WorkspaceConfigEntry(name="ISD-C", ref="jira:ISD-C"),
+        WorkspaceConfigEntry(name="mails", type="static"),
+        WorkspaceConfigEntry(name="ET-3"),
+    ]
+
+
 @patch("et.task.log_time_for_current_workspace", side_effect=JiraLogTimeError("no timer"))
 def test_complete_task_propagates_log_time_error(mock_log_time):
     with pytest.raises(JiraLogTimeError, match="no timer"):
@@ -262,10 +384,11 @@ def test_complete_task_propagates_log_time_error(mock_log_time):
 
 @patch("et.task.workspaces.rename_all_workspaces", side_effect=WorkspaceError("rename boom"))
 @patch("et.task.save_config")
+@patch("et.task.tracker.load_timers", return_value=[])
 @patch("et.task.load_config")
 @patch("et.task.log_time_for_current_workspace")
 def test_complete_task_wraps_workspace_error_after_logging(
-    mock_log_time, mock_load_config, _mock_save_config, _mock_rename_all
+    mock_log_time, mock_load_config, _mock_load_timers, _mock_save_config, _mock_rename_all
 ):
     mock_log_time.return_value = LogTimeResult(
         workspace_index=0, issue_key="ISD-2", seconds_logged=780, tracker_reset=True
@@ -274,3 +397,19 @@ def test_complete_task_wraps_workspace_error_after_logging(
 
     with pytest.raises(TaskError, match="rename boom"):
         complete_task_for_current_workspace()
+
+
+@patch("et.task.tracker.load_timers", side_effect=TrackerError("no schema"))
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_wraps_tracker_error_loading_timers(
+    mock_log_time, mock_load_config, _mock_load_timers
+):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=0, issue_key="ISD-2", seconds_logged=780, tracker_reset=True
+    )
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ISD-2", ref="jira:ISD-2")])
+
+    with pytest.raises(TaskError, match="no schema"):
+        complete_task_for_current_workspace()
+

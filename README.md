@@ -144,7 +144,10 @@ workspace to it (same as `et jira get` would).
 
 `et task complete` logs the active workspace's tracked time to Jira (like
 `et jira log-time`, no confirmation prompt) and then resets that workspace
-back to a bare `ET-<n>` slot, freeing it for a future `et task create`.
+back to a bare `ET-<n>` slot. Every non-`static` workspace after it is then
+shifted one slot to the left (its Tracker timer follows it), so the freed
+slot ends up at the end of the non-static range — ready for a future `et
+task create` — instead of leaving a gap in the middle of your workspaces.
 
 ## Configuration
 
