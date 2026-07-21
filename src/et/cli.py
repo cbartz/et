@@ -10,12 +10,14 @@ import typer
 
 from et.config import ConfigError, get_max_workspaces, load_config, load_workspace_names
 from et.jira_sync import JiraSyncError, jira_key_from_ref, preview_reshuffle, sync_jira_workspaces
+from et.jira_time import JiraLogTimeError, log_time_for_current_workspace
 from et.tracker import (
     TrackerError,
     add_tracker_for_current_workspace,
     add_trackers_for_all_workspaces,
     dump_all_trackers,
     dump_tracker_for_current_workspace,
+    format_duration,
     reset_all_trackers,
     reset_tracker_for_current_workspace,
 )
@@ -344,3 +346,37 @@ def jira_get(
         result.assigned or result.moved or result.kept or result.deleted or result.skipped
     ):
         typer.echo("Nothing to do — workspaces already match your active issues.")
+
+
+@jira_app.command("log-time")
+def jira_log_time(
+    comment: str | None = typer.Option(
+        None, "--comment", "-m", help="Worklog description/comment to attach in Jira."
+    ),
+    no_reset: bool = typer.Option(
+        False,
+        "--no-reset",
+        help="Don't reset the tracker after logging (leaves its elapsed time as-is).",
+    ),
+) -> None:
+    """Log the active workspace's tracked time to its Jira issue.
+
+    Reads the elapsed time from the ET-<n> Tracker timer bound to the active
+    workspace, resolves the Jira issue linked to that workspace (see `et
+    jira get`/`et ws info`), and logs it as a Jira worklog for that issue
+    (via Jira's own worklog API, which also shows up in Tempo timesheets
+    when Tempo is configured to sync native Jira worklogs). The tracker is
+    reset to 0 afterwards, unless --no-reset is given.
+    """
+    try:
+        result = log_time_for_current_workspace(description=comment, reset=not no_reset)
+    except (ConfigError, WorkspaceError, JiraLogTimeError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    duration = format_duration(result.seconds_logged)
+    typer.echo(
+        f"Logged {duration} to jira:{result.issue_key} (workspace {result.workspace_index + 1})"
+    )
+    if result.tracker_reset:
+        typer.echo("Reset tracker to 0")

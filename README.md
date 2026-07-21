@@ -14,6 +14,8 @@ workspaces around your active Jira issues.
 - **`et tracker reset` / `dump`** — reset or export elapsed times.
 - **`et jira get`** — fetch your active Jira issues and reconcile workspaces
   and Tracker timers to match, highest priority first.
+- **`et jira log-time`** — log the active workspace's tracked time to its
+  linked Jira issue.
 
 ## Requirements
 
@@ -94,6 +96,21 @@ indices. Workspaces whose tracked issue is no longer active are reset back to a
 plain `ET-<n>` slot after confirmation (their timer is first dumped to
 `~/timers/by-id/jira-<KEY>.txt`, then reset).
 
+```bash
+et jira log-time                          # log the active workspace's tracked time to Jira
+et jira log-time --comment "Fixed it"     # attach a worklog comment
+et jira log-time --no-reset               # log the time but leave the tracker running
+```
+
+`et jira log-time` reads the elapsed time from the `ET-<n>` Tracker timer
+bound to the active workspace, resolves the Jira issue linked to that
+workspace (its `ref`, e.g. from `et jira get`), and logs it as a worklog via
+Jira's own worklog API (no separate Tempo credential needed — worklogs
+created this way still show up in Tempo timesheets when Tempo is configured
+to sync native Jira worklogs). At least a minute of elapsed time is
+required. On success the tracker is reset to 0, unless `--no-reset` is
+given.
+
 ## Configuration
 
 `et` reads `~/.config/et/config.yaml` (override the directory with the
@@ -103,7 +120,8 @@ plain `ET-<n>` slot after confirmation (their timer is first dumped to
 # Capacity cap shared by `tracker add --all` and `jira get`. Optional (default 10).
 max_workspaces: 10
 
-# Jira Cloud REST credentials + query. Required only for `et jira get`.
+# Jira Cloud REST credentials + query. Required for `et jira get` and
+# `et jira log-time`.
 jira:
   base_url: https://your-org.atlassian.net
   email: you@example.com

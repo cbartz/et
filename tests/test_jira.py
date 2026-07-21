@@ -1,4 +1,4 @@
-"""Tests for et.jira, mocking requests.get."""
+"""Tests for et.jira, mocking requests.get/requests.post."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 import requests
 
 from et.config import JiraConfig
-from et.jira import JiraError, JiraIssue, fetch_active_issues
+from et.jira import JiraError, JiraIssue, create_worklog, fetch_active_issues
 
 
 def _config(**overrides: object) -> JiraConfig:
@@ -144,3 +144,69 @@ def test_fetch_active_issues_respects_custom_priority_order(mock_get):
     issues = fetch_active_issues(config)
 
     assert [issue.key for issue in issues] == ["PROJ-2", "PROJ-1"]
+
+
+def _json_response(status_code: int, payload: object) -> MagicMock:
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = payload
+    response.text = str(payload)
+    return response
+
+
+@patch("et.jira.requests.post")
+def test_create_worklog_posts_seconds_to_issue_worklog_endpoint(mock_post):
+    mock_post.return_value = _json_response(201, {"id": "191776"})
+    config = _config(base_url="https://example.atlassian.net")
+
+    result = create_worklog(config, "PROJ-1", 780)
+
+    assert result == {"id": "191776"}
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://example.atlassian.net/rest/api/3/issue/PROJ-1/worklog"
+    assert kwargs["json"] == {"timeSpentSeconds": 780}
+    assert kwargs["auth"] == (config.email, config.pat)
+
+
+@patch("et.jira.requests.post")
+def test_create_worklog_includes_comment_as_adf_document_when_given(mock_post):
+    mock_post.return_value = _json_response(201, {"id": "191776"})
+
+    create_worklog(_config(), "PROJ-1", 780, comment="Investigating ISD-1")
+
+    _args, kwargs = mock_post.call_args
+    assert kwargs["json"]["comment"] == {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": "Investigating ISD-1"}],
+            }
+        ],
+    }
+
+
+@patch("et.jira.requests.post")
+def test_create_worklog_omits_comment_when_not_given(mock_post):
+    mock_post.return_value = _json_response(201, {"id": "191776"})
+
+    create_worklog(_config(), "PROJ-1", 780)
+
+    _args, kwargs = mock_post.call_args
+    assert "comment" not in kwargs["json"]
+
+
+@patch("et.jira.requests.post")
+def test_create_worklog_raises_on_non_2xx_status(mock_post):
+    mock_post.return_value = _json_response(400, {"errorMessages": ["bad request"]})
+
+    with pytest.raises(JiraError, match="400"):
+        create_worklog(_config(), "PROJ-1", 780)
+
+
+@patch("et.jira.requests.post", side_effect=requests.ConnectionError("no route to host"))
+def test_create_worklog_wraps_network_errors(mock_post):
+    with pytest.raises(JiraError, match="no route to host"):
+        create_worklog(_config(), "PROJ-1", 780)
+

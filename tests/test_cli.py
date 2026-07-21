@@ -11,6 +11,7 @@ from et.cli import _hyperlink, app
 from et.config import EtConfig, JiraConfig, WorkspaceConfigEntry
 from et.jira import JiraIssue
 from et.jira_sync import JiraSyncResult
+from et.jira_time import JiraLogTimeError, LogTimeResult
 
 runner = CliRunner()
 
@@ -263,3 +264,43 @@ def test_jira_get_annotates_each_issue_with_its_workspace_action(mock_sync, mock
     assert "KEEP [High] Keep summary  (ws unchanged (1))" in result.stdout
     assert "NEW [Medium] New summary  (ws created (2))" in result.stdout
     assert "MOVE [Low] Move summary  (ws move (2 -> 3))" in result.stdout
+
+
+@patch("et.cli.log_time_for_current_workspace")
+def test_jira_log_time_reports_logged_duration_and_reset(mock_log_time):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=1, issue_key="ISD-321", seconds_logged=4320, tracker_reset=True
+    )
+
+    result = runner.invoke(app, ["jira", "log-time"])
+
+    assert result.exit_code == 0
+    assert "Logged 1h 12m 0s to jira:ISD-321 (workspace 2)" in result.stdout
+    assert "Reset tracker to 0" in result.stdout
+    mock_log_time.assert_called_once_with(description=None, reset=True)
+
+
+@patch("et.cli.log_time_for_current_workspace")
+def test_jira_log_time_passes_comment_and_no_reset_flags(mock_log_time):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=0, issue_key="ISD-321", seconds_logged=60, tracker_reset=False
+    )
+
+    result = runner.invoke(
+        app, ["jira", "log-time", "--comment", "Investigating", "--no-reset"]
+    )
+
+    assert result.exit_code == 0
+    assert "Logged 0h 1m 0s to jira:ISD-321 (workspace 1)" in result.stdout
+    assert "Reset tracker to 0" not in result.stdout
+    mock_log_time.assert_called_once_with(description="Investigating", reset=False)
+
+
+@patch("et.cli.log_time_for_current_workspace")
+def test_jira_log_time_reports_error(mock_log_time):
+    mock_log_time.side_effect = JiraLogTimeError("no Jira issue linked to workspace 1")
+
+    result = runner.invoke(app, ["jira", "log-time"])
+
+    assert result.exit_code == 1
+    assert "Error: no Jira issue linked to workspace 1" in result.output

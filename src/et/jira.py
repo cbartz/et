@@ -1,4 +1,5 @@
-"""Client for Jira Cloud's REST API, used to fetch the user's active issues.
+"""Client for Jira Cloud's REST API, used to fetch the user's active issues
+and (for `et jira log-time`) to log work against an issue.
 
 Talks to Jira Cloud's `/rest/api/3/search/jql` endpoint (the old
 `/rest/api/3/search` endpoint was retired by Atlassian and now returns HTTP
@@ -6,7 +7,7 @@ Talks to Jira Cloud's `/rest/api/3/search/jql` endpoint (the old
 bearer-PAT mode). The new endpoint paginates via a `nextPageToken` cursor
 rather than `startAt`/`total`, so all pages are fetched and concatenated.
 Has no Typer/CLI dependency; the HTTP call goes through `requests` so it
-can be unit tested by mocking `requests.get`.
+can be unit tested by mocking `requests.get`/`requests.post`.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import requests
 from et.config import JiraConfig
 
 SEARCH_PATH = "rest/api/3/search/jql"
+WORKLOG_PATH_TEMPLATE = "rest/api/3/issue/{key}/worklog"
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,59 @@ class JiraIssue:
     key: str
     summary: str
     priority: str
+
+
+def _text_comment(text: str) -> dict[str, object]:
+    """Wrap plain text in the minimal Atlassian Document Format Jira expects for comments."""
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
+    }
+
+
+def create_worklog(
+    jira_config: JiraConfig, issue_key: str, seconds: int, comment: str | None = None
+) -> dict[str, object]:
+    """Log `seconds` of work against `issue_key` via Jira's own worklog API.
+
+    This is Jira's native worklog feature (`POST
+    /rest/api/3/issue/{key}/worklog`), not Tempo's — but worklogs created
+    this way still show up in Tempo timesheets when Tempo is configured to
+    sync native Jira worklogs, which avoids needing a separate Tempo API
+    token. Returns the created worklog's raw JSON. Raises `JiraError` if the
+    request cannot be made or Jira rejects it.
+    """
+    url = jira_config.base_url.rstrip("/") + "/" + WORKLOG_PATH_TEMPLATE.format(key=issue_key)
+    payload: dict[str, object] = {"timeSpentSeconds": seconds}
+    if comment:
+        payload["comment"] = _text_comment(comment)
+
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            auth=(jira_config.email, jira_config.pat),
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise JiraError(f"could not reach Jira at {url}: {exc}") from exc
+
+    if response.status_code not in (200, 201):
+        raise JiraError(
+            f"Jira API request to {url} failed with status {response.status_code}: "
+            f"{response.text.strip()[:500]}"
+        )
+
+    try:
+        payload_response = response.json()
+    except ValueError as exc:
+        raise JiraError(f"could not parse Jira API response as JSON: {exc}") from exc
+
+    if not isinstance(payload_response, dict):
+        raise JiraError(f"unexpected Jira API response from {url}: not a JSON object")
+
+    return payload_response
 
 
 def _fetch_issue_pages(jira_config: JiraConfig, url: str) -> list[object]:
