@@ -66,6 +66,7 @@ et ws rename focus          # rename the active workspace to "focus"
 et ws rename --all          # rename workspaces 0..n-1 from the config's "workspaces" list
 et ws info                  # show the Jira issue linked to the active workspace
 et ws delete                # delete the active workspace, shifting later ones left
+et ws delete --force        # same, even if still linked to a Jira issue (tracker is lost)
 ```
 
 `et ws delete` shrinks the managed workspace pool by one. It only works on a
@@ -74,7 +75,10 @@ complete` or `et jira log-time` first if it still is). Every non-`static`
 workspace after the deleted one (and its Tracker timer) shifts one slot to
 the left to close the gap, `max_workspaces` is decremented by one, and
 GNOME's actual workspace count shrinks to match. Refuses to delete the last
-remaining workspace.
+remaining workspace. `--force` bypasses the Jira-linked check for
+assigned/in-progress workspaces — its Tracker timer is discarded rather than
+logged, so log the time first if you need it (`--force` never bypasses the
+`static` check).
 
 ### Tracker timers
 

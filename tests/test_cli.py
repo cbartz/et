@@ -205,6 +205,19 @@ def test_ws_delete_reports_error(mock_delete):
     assert "Error: workspace 1 is linked to ISD-1; complete it first" in result.output
 
 
+@patch("et.cli.delete_active_workspace")
+def test_ws_delete_force_passes_flag_through(mock_delete):
+    from et.ws import WsDeleteResult
+
+    mock_delete.return_value = WsDeleteResult(workspace_index=0, remaining_workspaces=1)
+
+    result = runner.invoke(app, ["ws", "delete", "--force"])
+
+    assert result.exit_code == 0
+    mock_delete.assert_called_once_with(force=True)
+    assert "Deleted workspace 1" in result.stdout
+
+
 @patch("et.cli.reset_tracker_for_current_workspace", return_value=(0, "ET-1"))
 def test_tracker_reset_current_workspace_reports_reset_timer(mock_reset):
     result = runner.invoke(app, ["tracker", "reset"])

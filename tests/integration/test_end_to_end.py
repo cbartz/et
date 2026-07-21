@@ -95,7 +95,8 @@ class FakeSystem:
 
 
 @pytest.fixture
-def system():
+def system(tmp_path, monkeypatch):
+    monkeypatch.setenv("ET_CONFIG_DIR", str(tmp_path))
     fake = FakeSystem()
     with (
         patch("shutil.which", return_value="/usr/bin/fake"),

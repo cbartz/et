@@ -193,18 +193,26 @@ def info() -> None:
 
 
 @ws_app.command("delete")
-def ws_delete() -> None:
+def ws_delete(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Delete even if the workspace is still linked to a Jira issue; its tracker is lost.",
+    ),
+) -> None:
     """Delete the active workspace, shifting later workspaces left to fill the gap.
 
     Only works when the active workspace is free (not `static`, and not
     linked to a Jira issue) — use `et task complete` (or `et jira
-    log-time`) first if it's still tracking something. Every non-static
-    workspace after it (and its Tracker timer) shifts one slot to the
-    left, then the now-freed last slot is removed entirely: `max_workspaces`
-    is decremented by 1 and GNOME's actual workspace count shrinks to match.
+    log-time`) first if it's still tracking something, or pass `--force`
+    to delete it anyway (its Tracker timer, if any, is discarded rather
+    than logged). Every non-static workspace after it (and its Tracker
+    timer) shifts one slot to the left, then the now-freed last slot is
+    removed entirely: `max_workspaces` is decremented by 1 and GNOME's
+    actual workspace count shrinks to match.
     """
     try:
-        result = delete_active_workspace()
+        result = delete_active_workspace(force=force)
     except (ConfigError, WorkspaceError, WsDeleteError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error

@@ -229,15 +229,113 @@ def test_delete_active_workspace_rejects_static(mock_load_config, _mock_active_i
         delete_active_workspace()
 
 
-@patch("et.ws.workspaces.get_active_workspace_index", return_value=0)
+@patch("et.ws.workspaces.get_active_workspace_index", return_value=1)
 @patch("et.ws.load_config")
 def test_delete_active_workspace_rejects_linked_ref(mock_load_config, _mock_active_index):
     mock_load_config.return_value = _config(
-        [WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A")],
+        [
+            WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+            WorkspaceConfigEntry(name="ISD-B", ref="jira:ISD-B"),
+        ],
         max_workspaces=2,
     )
-    with pytest.raises(WsDeleteError, match="ISD-A"):
+    with pytest.raises(WsDeleteError, match="ISD-B"):
         delete_active_workspace()
+
+
+@patch("et.ws.workspaces.switch_to_workspace")
+@patch("et.ws.workspaces.rename_all_workspaces")
+@patch("et.ws.save_config")
+@patch("et.ws.workspaces.configure_static_workspace_count")
+@patch("et.ws.tracker.save_timers_with_reload")
+@patch("et.ws.tracker.load_timers")
+@patch("et.ws.workspaces.get_active_workspace_index", return_value=0)
+@patch("et.ws.load_config")
+def test_delete_active_workspace_force_discards_linked_ref_and_timer(
+    mock_load_config,
+    _mock_active_index,
+    mock_load_timers,
+    mock_save_timers,
+    _mock_configure_count,
+    mock_save_config,
+    mock_rename_all,
+    _mock_switch,
+):
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+            WorkspaceConfigEntry(name="ISD-B", ref="jira:ISD-B"),
+        ],
+        max_workspaces=2,
+    )
+    a_timer = _timer(0, "ET-1", elapsed=500, running=True)
+    b_timer = _timer(1, "ET-2", elapsed=42)
+    mock_load_timers.return_value = [a_timer, b_timer]
+
+    result = delete_active_workspace(force=True)
+
+    assert result.workspace_index == 0
+    assert result.remaining_workspaces == 1
+
+    saved_config = mock_save_config.call_args[0][0]
+    assert saved_config.workspaces == [WorkspaceConfigEntry(name="ISD-B", ref="jira:ISD-B")]
+    mock_rename_all.assert_called_once_with(["ISD-B"])
+
+    saved_timers = mock_save_timers.call_args[0][0]
+    assert a_timer not in saved_timers  # discarded, not logged
+    assert b_timer in saved_timers
+    assert b_timer["workspaceId"] == 0
+    assert b_timer["name"] == "ET-1"
+
+
+@patch("et.ws.workspaces.switch_to_workspace")
+@patch("et.ws.workspaces.rename_all_workspaces")
+@patch("et.ws.save_config")
+@patch("et.ws.workspaces.configure_static_workspace_count")
+@patch("et.ws.tracker.save_timers_with_reload")
+@patch("et.ws.tracker.load_timers")
+@patch("et.ws.workspaces.get_active_workspace_index", return_value=1)
+@patch("et.ws.load_config")
+def test_delete_active_workspace_force_last_slot_discards_timer(
+    mock_load_config,
+    _mock_active_index,
+    mock_load_timers,
+    mock_save_timers,
+    _mock_configure_count,
+    mock_save_config,
+    _mock_rename_all,
+    _mock_switch,
+):
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+            WorkspaceConfigEntry(name="ISD-B", ref="jira:ISD-B"),
+        ],
+        max_workspaces=2,
+    )
+    b_timer = _timer(1, "ET-2", elapsed=500)
+    mock_load_timers.return_value = [b_timer]
+
+    result = delete_active_workspace(force=True)
+
+    assert result.remaining_workspaces == 1
+    saved_config = mock_save_config.call_args[0][0]
+    assert saved_config.workspaces == [WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A")]
+    mock_save_timers.assert_not_called()  # deleted slot was last; nothing to shift
+
+
+@patch("et.ws.workspaces.get_active_workspace_index", return_value=1)
+@patch("et.ws.load_config")
+def test_delete_active_workspace_force_still_rejects_static(mock_load_config, _mock_active_index):
+    mock_load_config.return_value = _config(
+        [
+            WorkspaceConfigEntry(name="ISD-A", ref="jira:ISD-A"),
+            WorkspaceConfigEntry(name="mails", type="static"),
+        ],
+        max_workspaces=2,
+    )
+    with pytest.raises(WsDeleteError, match="static"):
+        delete_active_workspace(force=True)
 
 
 @patch("et.ws.load_config")

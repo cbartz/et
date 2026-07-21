@@ -104,14 +104,15 @@ def _trim_trailing_default_entries(workspaces_list: list[WorkspaceConfigEntry]) 
         workspaces_list.pop()
 
 
-def delete_active_workspace() -> WsDeleteResult:
+def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
     """Delete the active workspace's slot, shifting later ones left to fill the gap.
 
     Only works on a "free" workspace — non-`static`, and with no Jira `ref`
     linked (the same definition `et task create` uses to find an empty
     slot to reuse). Raises `WsDeleteError` if the active workspace is
-    `static` or still linked to an issue; use `et task complete` (or `et
-    jira log-time`) first to free it.
+    `static`; use `et task complete` (or `et jira log-time`) first to free
+    a Jira-linked workspace, or pass `force=True` to delete it anyway
+    (its Tracker timer, if any, is discarded rather than logged).
 
     Every non-static workspace after the active one (and its Tracker
     timer) is shifted one slot to the left, same as `et task complete`,
@@ -140,10 +141,11 @@ def delete_active_workspace() -> WsDeleteResult:
     entry = workspaces_list[index]
     if entry.type == "static":
         raise WsDeleteError(f"workspace {index + 1} is a static workspace and can't be deleted")
-    if entry.ref is not None:
+    if entry.ref is not None and not force:
         key = jira_key_from_ref(entry.ref) or entry.ref
         raise WsDeleteError(
-            f"workspace {index + 1} is linked to {key}; complete or unlink it first"
+            f"workspace {index + 1} is linked to {key}; complete or unlink it first "
+            "(or pass --force to delete it anyway)"
         )
 
     try:
