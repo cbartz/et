@@ -103,12 +103,14 @@ et ws delete --force        # same, even if still linked to a Jira issue (tracke
 "free" workspace — not `static`, and not linked to a Jira issue (run `et
 jira complete` first if it still is). Every non-`static` workspace after the
 deleted one (and its Tracker timer) shifts one slot to the left to close the
-gap, leaving the freed bare `ET-<n>` slot at the end of the pool. GNOME's
-workspace count is left unchanged — you manage that yourself (see
-[Configuration](#configuration)). `--force` bypasses the Jira-linked check
-for assigned/in-progress workspaces — its Tracker timer is discarded rather
-than logged, so log the time first if you need it (`--force` never bypasses
-the `static` check).
+gap, then the now-empty trailing slot is reclaimed by decrementing GNOME's
+workspace count (`num-workspaces`). The exception is when the
+highest-numbered workspace is `static` — shrinking would swallow it, so the
+count is left unchanged and the freed slot just becomes a bare `ET-<n>`.
+Refuses to delete the last remaining workspace. `--force` bypasses the
+Jira-linked check for assigned/in-progress workspaces — its Tracker timer is
+discarded rather than logged, so log the time first if you need it (`--force`
+never bypasses the `static` check).
 
 ### Tasks
 

@@ -218,12 +218,12 @@ def test_info_command_shows_full_app_help_when_workspace_is_static(mock_load_con
 def test_ws_delete_reports_summary(mock_delete):
     from et.ws import WsDeleteResult
 
-    mock_delete.return_value = WsDeleteResult(workspace_index=1)
+    mock_delete.return_value = WsDeleteResult(workspace_index=1, remaining_workspaces=4)
 
     result = runner.invoke(app, ["ws", "delete"])
 
     assert result.exit_code == 0
-    assert "Freed workspace 2 (shifted later tasks left)" in result.stdout
+    assert "Deleted workspace 2 (now managing 4 workspaces)" in result.stdout
 
 
 @patch("et.cli.delete_active_workspace")
@@ -242,13 +242,13 @@ def test_ws_delete_reports_error(mock_delete):
 def test_ws_delete_force_passes_flag_through(mock_delete):
     from et.ws import WsDeleteResult
 
-    mock_delete.return_value = WsDeleteResult(workspace_index=0)
+    mock_delete.return_value = WsDeleteResult(workspace_index=0, remaining_workspaces=1)
 
     result = runner.invoke(app, ["ws", "delete", "--force"])
 
     assert result.exit_code == 0
     mock_delete.assert_called_once_with(force=True)
-    assert "Freed workspace 1 (shifted later tasks left)" in result.stdout
+    assert "Deleted workspace 1 (now managing 1 workspace)" in result.stdout
 
 
 # --- static-workspace startup check ------------------------------------------

@@ -26,6 +26,7 @@ class WsDeleteResult:
     """Summary of what `delete_active_workspace` did."""
 
     workspace_index: int
+    remaining_workspaces: int
 
 
 def shift_workspaces_left(
@@ -104,7 +105,7 @@ def _trim_trailing_default_entries(workspaces_list: list[WorkspaceConfigEntry]) 
 
 
 def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
-    """Free the active workspace's slot, shifting later ones left to fill the gap.
+    """Delete the active workspace's slot, shifting later ones left to fill the gap.
 
     Only works on a "free" workspace — non-`static`, and with no Jira `ref`
     linked (the same definition `et jira start` uses to find an empty
@@ -115,10 +116,13 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
 
     Every non-static workspace after the active one (and its Tracker
     timer) is shifted one slot to the left, same as `et jira complete`, so
-    the freed bare slot ends up at the end of the non-static range. GNOME's
-    workspace count is left untouched (the user manages it) — the freed slot
-    simply becomes an empty "ET-<n>" workspace, ready for a future `et jira
-    start`.
+    the freed bare slot ends up at the end of the non-static range. That
+    now-empty trailing slot is then removed: GNOME's workspace count
+    (`num-workspaces`) is decremented by one. The one exception is when the
+    highest-numbered workspace is `static` (so shrinking would swallow it) —
+    then the count is left untouched and the freed slot simply becomes an
+    empty "ET-<n>" workspace instead. Refuses to delete the last remaining
+    workspace.
 
     Raises `ConfigError` if the config file is missing/malformed,
     `WorkspaceError` (unwrapped) if the active workspace can't be
@@ -132,6 +136,9 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
         count = workspaces.get_workspace_count()
     except WorkspaceError as exc:
         raise WsDeleteError(str(exc)) from exc
+
+    if count <= 1:
+        raise WsDeleteError("cannot delete the last remaining workspace")
 
     padded_len = max(len(config.workspaces), count, index + 1)
     workspaces_list = list(config.workspaces) + [
@@ -156,21 +163,31 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
     workspaces_list[index] = default_entry(index, entry.type)
     timers_changed = shift_workspaces_left(workspaces_list, entries, index)
 
+    # Reclaim the freed slot by shrinking GNOME's workspace count, unless the
+    # highest-numbered workspace is static (shrinking removes the last GNOME
+    # workspace, so we mustn't when that's a static one we never touch).
+    shrink = workspaces_list[count - 1].type != "static"
+    new_count = count - 1 if shrink else count
+    rename_source = workspaces_list[:new_count] if shrink else workspaces_list
+    rename_names = [item.name for item in rename_source]
+
     saved_list = list(workspaces_list)
     _trim_trailing_default_entries(saved_list)
 
     try:
         if timers_changed:
             tracker.save_timers_with_reload(entries, "shifting timers after deleting a workspace")
+        if shrink:
+            workspaces.set_workspace_count(new_count)
         save_config(replace(config, workspaces=saved_list))
-        # Rename the full padded range (not the trimmed list) so freed
-        # trailing slots get their bare "ET-<n>" GNOME name back.
-        workspaces.rename_all_workspaces([item.name for item in workspaces_list])
-        workspaces.switch_to_workspace(index)
+        # Rename after any shrink so the workspace-names array matches the
+        # (possibly reduced) set of live GNOME workspaces.
+        workspaces.rename_all_workspaces(rename_names)
+        workspaces.switch_to_workspace(min(index, new_count - 1))
     except (ConfigError, WorkspaceError, TrackerError) as exc:
         raise WsDeleteError(str(exc)) from exc
 
-    return WsDeleteResult(workspace_index=index)
+    return WsDeleteResult(workspace_index=index, remaining_workspaces=new_count)
 
 
 __all__ = [

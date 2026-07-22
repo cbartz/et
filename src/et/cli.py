@@ -226,8 +226,9 @@ def ws_delete(
     log-time`) first if it's still tracking something, or pass `--force`
     to delete it anyway (its Tracker timer, if any, is discarded rather
     than logged). Every non-static workspace after it (and its Tracker
-    timer) shifts one slot to the left, leaving the freed bare "ET-<n>"
-    slot at the end of the pool. GNOME's workspace count is left unchanged.
+    timer) shifts one slot to the left, then the now-empty trailing slot is
+    removed by decrementing GNOME's workspace count (unless the last
+    workspace is `static`, in which case the count is left unchanged).
     """
     try:
         result = delete_active_workspace(force=force)
@@ -235,7 +236,11 @@ def ws_delete(
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
-    typer.echo(f"Freed workspace {result.workspace_index + 1} (shifted later tasks left)")
+    plural = "workspace" if result.remaining_workspaces == 1 else "workspaces"
+    typer.echo(
+        f"Deleted workspace {result.workspace_index + 1} "
+        f"(now managing {result.remaining_workspaces} {plural})"
+    )
 
 
 def _print_task_created(result: TaskCreateResult) -> None:
