@@ -46,7 +46,7 @@ def _config(
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
-@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
+@patch("et.task.tracker.prepare_timer_for_workspace", return_value=("ET-1", True))
 @patch("et.task.workspaces.set_workspace_count")
 @patch("et.task.workspaces.get_workspace_count", return_value=5)
 @patch("et.task.load_config")
@@ -76,7 +76,7 @@ def test_create_task_workspace_uses_first_free_slot(
     assert result.timer_created is True
 
     mock_set_count.assert_not_called()
-    mock_add_tracker.assert_called_once_with(1)
+    mock_add_tracker.assert_called_once_with(1, 5)
     saved_config = mock_save_config.call_args[0][0]
     assert saved_config.workspaces[1] == WorkspaceConfigEntry(
         name="my-task", ref=None, description="doing stuff"
@@ -91,7 +91,7 @@ def test_create_task_workspace_uses_first_free_slot(
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
-@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
+@patch("et.task.tracker.prepare_timer_for_workspace", return_value=("ET-1", True))
 @patch("et.task.workspaces.set_workspace_count")
 @patch("et.task.workspaces.get_workspace_count", return_value=1)
 @patch("et.task.load_config")
@@ -119,7 +119,7 @@ def test_create_task_workspace_succeeds_when_window_move_unsupported(
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
-@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-2", True))
+@patch("et.task.tracker.prepare_timer_for_workspace", return_value=("ET-2", True))
 @patch("et.task.workspaces.set_workspace_count")
 @patch("et.task.workspaces.get_workspace_count", return_value=3)
 @patch("et.task.load_config")
@@ -144,14 +144,14 @@ def test_create_task_workspace_uses_implicit_bare_slot_within_count(
     assert result is not None
     assert result.workspace_index == 1
     mock_set_count.assert_not_called()
-    mock_add_tracker.assert_called_once_with(1)
+    mock_add_tracker.assert_called_once_with(1, 3)
 
 
 @patch("et.task.workspaces.move_active_window_to_workspace")
 @patch("et.task.workspaces.switch_to_workspace")
 @patch("et.task.workspaces.rename_all_workspaces")
 @patch("et.task.save_config")
-@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-3", True))
+@patch("et.task.tracker.prepare_timer_for_workspace", return_value=("ET-3", True))
 @patch("et.task.workspaces.set_workspace_count")
 @patch("et.task.workspaces.get_workspace_count", return_value=2)
 @patch("et.task.load_config")
@@ -184,14 +184,14 @@ def test_create_task_workspace_prompts_and_grows_when_all_full(
     assert result.workspace_index == 2
     assert seen_count == [2]
     mock_set_count.assert_called_once_with(3)
-    mock_add_tracker.assert_called_once_with(2)
+    mock_add_tracker.assert_called_once_with(2, 3)
     saved_config = mock_save_config.call_args[0][0]
     assert len(saved_config.workspaces) == 3
 
 
 @patch("et.task.workspaces.set_workspace_count")
 @patch("et.task.save_config")
-@patch("et.task.tracker.add_tracker_for_workspace")
+@patch("et.task.tracker.prepare_timer_for_workspace")
 @patch("et.task.workspaces.get_workspace_count", return_value=2)
 @patch("et.task.load_config")
 def test_create_task_workspace_returns_none_when_grow_declined(
@@ -225,7 +225,7 @@ def test_create_task_workspace_wraps_workspace_error(mock_load_config, _mock_get
         create_task_workspace("my-task")
 
 
-@patch("et.task.tracker.add_tracker_for_workspace", side_effect=TrackerError("tracker boom"))
+@patch("et.task.tracker.prepare_timer_for_workspace", side_effect=TrackerError("tracker boom"))
 @patch("et.task.workspaces.get_workspace_count", return_value=1)
 @patch("et.task.load_config")
 def test_create_task_workspace_wraps_tracker_error(
@@ -238,7 +238,7 @@ def test_create_task_workspace_wraps_tracker_error(
 
 
 @patch("et.task.save_config", side_effect=ConfigError("config boom"))
-@patch("et.task.tracker.add_tracker_for_workspace", return_value=("ET-1", True))
+@patch("et.task.tracker.prepare_timer_for_workspace", return_value=("ET-1", True))
 @patch("et.task.workspaces.get_workspace_count", return_value=1)
 @patch("et.task.load_config")
 def test_create_task_workspace_wraps_config_error(

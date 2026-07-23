@@ -138,7 +138,9 @@ def create_task_workspace(
     try:
         if grew:
             workspaces.set_workspace_count(count + 1)
-        timer_created = tracker.add_tracker_for_workspace(slot)[1]
+        timer_created = tracker.prepare_timer_for_workspace(
+            slot, count + 1 if grew else count
+        )[1]
         save_config(replace(config, workspaces=workspaces_list))
         workspaces.rename_all_workspaces([entry.name for entry in workspaces_list])
         workspaces.switch_to_workspace(slot)

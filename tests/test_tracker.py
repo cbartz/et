@@ -12,10 +12,10 @@ from et.gnome_extensions import GnomeExtensionsError
 from et.gsettings import GSettingsError
 from et.tracker import (
     TrackerError,
-    add_tracker_for_workspace,
     build_new_timer,
     find_timer_for_workspace,
     format_duration,
+    prepare_timer_for_workspace,
 )
 
 SETTINGS_SENTINEL = {"id": "settings", "totalTimeSelected": True}
@@ -49,15 +49,14 @@ def test_build_new_timer_matches_tracker_default_shape():
 @patch("et.tracker.reload_around", return_value=nullcontext())
 @patch("et.tracker.gsettings.write_string_array")
 @patch("et.tracker.gsettings.read_string_array", return_value=[])
-def test_add_tracker_for_workspace_creates_timer_for_explicit_index(
-    mock_read, mock_write, mock_reload
-):
-    name, created = add_tracker_for_workspace(4)
+def test_prepare_timer_creates_timer_for_explicit_index(mock_read, mock_write, mock_reload):
+    name, created = prepare_timer_for_workspace(4, 5)
     assert (name, created) == ("ET-5", True)
     written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
     assert written_entries[0]["workspaceId"] == 4
 
 
+@patch("et.tracker.reload_around", return_value=nullcontext())
 @patch("et.tracker.gsettings.write_string_array")
 @patch(
     "et.tracker.gsettings.read_string_array",
@@ -67,6 +66,31 @@ def test_add_tracker_for_workspace_creates_timer_for_explicit_index(
                 "id": "existing",
                 "name": "mails",
                 "timeElapsed": 42,
+                "running": True,
+                "selected": False,
+                "workspaceId": 2,
+            }
+        ),
+    ],
+)
+def test_prepare_timer_resets_reused_slot_time(mock_read, mock_write, mock_reload):
+    name, created = prepare_timer_for_workspace(2, 3)
+    assert (name, created) == ("mails", False)
+    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
+    assert written_entries[0]["timeElapsed"] == 0
+    assert written_entries[0]["running"] is False
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps(
+            {
+                "id": "existing",
+                "name": "ET-3",
+                "timeElapsed": 0,
                 "running": False,
                 "selected": False,
                 "workspaceId": 2,
@@ -74,10 +98,35 @@ def test_add_tracker_for_workspace_creates_timer_for_explicit_index(
         ),
     ],
 )
-def test_add_tracker_for_workspace_is_noop_when_timer_already_exists(mock_read, mock_write):
-    name, created = add_tracker_for_workspace(2)
-    assert (name, created) == ("mails", False)
+def test_prepare_timer_is_noop_when_reused_slot_already_zero(mock_read, mock_write, mock_reload):
+    name, created = prepare_timer_for_workspace(2, 3)
+    assert (name, created) == ("ET-3", False)
     mock_write.assert_not_called()
+
+
+@patch("et.tracker.reload_around", return_value=nullcontext())
+@patch("et.tracker.gsettings.write_string_array")
+@patch(
+    "et.tracker.gsettings.read_string_array",
+    return_value=[
+        json.dumps(SETTINGS_SENTINEL),
+        json.dumps(
+            {"id": "stale", "name": "ET-9", "timeElapsed": 99, "workspaceId": 8}
+        ),
+        json.dumps(
+            {"id": "keep", "name": "my-notes", "timeElapsed": 7, "workspaceId": 8}
+        ),
+    ],
+)
+def test_prepare_timer_removes_orphaned_et_timers_beyond_count(mock_read, mock_write, mock_reload):
+    name, created = prepare_timer_for_workspace(0, 3)
+    assert (name, created) == ("ET-1", True)
+    written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
+    names = [entry.get("name") for entry in written_entries]
+    assert "ET-9" not in names  # orphaned et timer beyond the workspace count
+    assert "my-notes" in names  # user-named timer left untouched
+    assert SETTINGS_SENTINEL in written_entries
+    assert "ET-1" in names
 
 
 @patch("et.tracker.reload_around", return_value=nullcontext())
@@ -86,25 +135,25 @@ def test_add_tracker_for_workspace_is_noop_when_timer_already_exists(mock_read, 
     "et.tracker.gsettings.read_string_array",
     return_value=[json.dumps(SETTINGS_SENTINEL)],
 )
-def test_add_tracker_preserves_sentinel_entry(mock_read, mock_write, mock_reload):
-    add_tracker_for_workspace(0)
+def test_prepare_timer_preserves_sentinel_entry(mock_read, mock_write, mock_reload):
+    prepare_timer_for_workspace(0, 1)
     written_entries = [json.loads(raw) for raw in mock_write.call_args[0][2]]
     assert written_entries[0] == SETTINGS_SENTINEL
     assert len(written_entries) == 2
 
 
 @patch("et.tracker.gsettings.read_string_array", side_effect=GSettingsError("no schema"))
-def test_add_tracker_wraps_gsettings_error(mock_read):
+def test_prepare_timer_wraps_gsettings_error(mock_read):
     with pytest.raises(TrackerError, match="Tracker GNOME extension"):
-        add_tracker_for_workspace(0)
+        prepare_timer_for_workspace(0, 1)
 
 
 @patch("et.tracker.reload_around", side_effect=GnomeExtensionsError("could not disable"))
 @patch("et.tracker.gsettings.write_string_array")
 @patch("et.tracker.gsettings.read_string_array", return_value=[])
-def test_add_tracker_wraps_gnome_extensions_error(mock_read, mock_write, mock_reload):
+def test_prepare_timer_wraps_gnome_extensions_error(mock_read, mock_write, mock_reload):
     with pytest.raises(TrackerError, match="reload the Tracker extension"):
-        add_tracker_for_workspace(0)
+        prepare_timer_for_workspace(0, 1)
     mock_write.assert_not_called()
 
 

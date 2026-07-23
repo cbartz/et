@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -29,6 +30,12 @@ from et.gsettings import GSettingsError
 TRACKER_SCHEMA = "org.gnome.shell.extensions.tracker"
 TRACKER_TIMERS_KEY = "timers"
 TRACKER_EXTENSION_UUID = "tracker@aliakseiz.github.com"
+
+# Auto-created timers are named "ET-<workspace number>" (1-indexed). This
+# pattern is used to tell et's own timers apart from user-created ones, so
+# cleanup never touches timers a user named themselves (or the "settings"
+# sentinel, which has no name).
+_ET_TIMER_NAME_RE = re.compile(r"^ET-\d+$")
 
 # A Tracker entry is either a timer (id, name, timeElapsed, running, selected,
 # workspaceId) or the special {"id": "settings", "totalTimeSelected": ...}
@@ -126,19 +133,47 @@ def build_new_timer(workspace_id: int, name: str) -> TimerEntry:
     }
 
 
-def _ensure_timer_for_workspace(entries: list[TimerEntry], index: int) -> tuple[str, bool]:
-    """Find or append (in-place) a timer for workspace `index` in `entries`.
+def _is_et_timer(entry: TimerEntry) -> bool:
+    """Return whether `entry` is an et-created "ET-<n>" timer.
 
-    Returns (timer_name, created). Does not write to GSettings; callers are
-    responsible for saving `entries` if anything was created.
+    Never matches user-named timers or the "settings" sentinel (which has no
+    "name"), so cleanup only ever touches timers et created itself.
     """
-    existing = find_timer_for_workspace(entries, index)
-    if existing is not None:
-        return str(existing["name"]), False
+    name = entry.get("name")
+    return isinstance(name, str) and _ET_TIMER_NAME_RE.match(name) is not None
 
-    name = f"ET-{index + 1}"
-    entries.append(build_new_timer(index, name))
-    return name, True
+
+def _remove_orphaned_et_timers(entries: list[TimerEntry], workspace_count: int) -> bool:
+    """Drop (in-place) et-created timers bound to a workspace beyond `workspace_count`.
+
+    A leftover "ET-<n>" timer whose `workspaceId` is out of range (negative,
+    or `>= workspace_count`) is a stale remnant from a previous run whose
+    workspace no longer exists. Returns whether anything was removed.
+    """
+
+    def is_orphan(entry: TimerEntry) -> bool:
+        workspace_id = entry.get("workspaceId")
+        if not _is_et_timer(entry) or not isinstance(workspace_id, int):
+            return False
+        return not (0 <= workspace_id < workspace_count)
+
+    orphans = [entry for entry in entries if is_orphan(entry)]
+    for entry in orphans:
+        entries.remove(entry)
+    return bool(orphans)
+
+
+def _reset_timer(entry: TimerEntry) -> bool:
+    """Zero out (in-place) a reused timer's elapsed time and running state.
+
+    Returns whether anything changed, so a reused-but-already-zero timer
+    doesn't trigger a needless GSettings write.
+    """
+    if not entry.get("timeElapsed") and not entry.get("running"):
+        return False
+    entry["timeElapsed"] = 0
+    entry["running"] = False
+    return True
 
 
 def save_timers_with_reload(entries: list[TimerEntry], action: str) -> None:
@@ -153,20 +188,39 @@ def save_timers_with_reload(entries: list[TimerEntry], action: str) -> None:
         ) from exc
 
 
-def add_tracker_for_workspace(index: int) -> tuple[str, bool]:
-    """Add a Tracker timer for workspace `index`, if one doesn't already exist.
+def prepare_timer_for_workspace(index: int, workspace_count: int) -> tuple[str, bool]:
+    """Ensure a fresh, zeroed Tracker timer exists for workspace `index`.
 
-    Returns a tuple of (timer_name, created), where `created` is False if a
-    timer was already associated with `index` (in which case no write
-    happens and `timer_name` is the existing timer's name).
+    Cleans up stale state before (re)using the slot:
+
+    * Any orphaned "ET-<n>" timer bound to a workspace beyond `workspace_count`
+      (a leftover from a previous run) is removed.
+    * If a timer already exists for `index`, its elapsed time and running
+      state are reset to zero so a reused slot never inherits a previous
+      task's accumulated time.
+    * Otherwise a new timer is created for `index`.
+
+    The disable/write/enable reload dance runs only if something actually
+    changed. Returns (timer_name, created), where `created` is False when an
+    existing timer was reused (after being reset).
     """
     entries = load_timers()
-    name, created = _ensure_timer_for_workspace(entries, index)
-    if not created:
-        return name, False
+    changed = _remove_orphaned_et_timers(entries, workspace_count)
 
-    save_timers_with_reload(entries, "writing the new timer")
-    return name, True
+    existing = find_timer_for_workspace(entries, index)
+    if existing is not None:
+        name = str(existing["name"])
+        created = False
+        changed = _reset_timer(existing) or changed
+    else:
+        name = f"ET-{index + 1}"
+        entries.append(build_new_timer(index, name))
+        created = True
+        changed = True
+
+    if changed:
+        save_timers_with_reload(entries, "preparing the workspace timer")
+    return name, created
 
 
 def format_duration(seconds: float) -> str:
