@@ -399,18 +399,51 @@ def test_jira_log_time_logs_and_reports_duration(mock_log_time):
 
 @patch("et.cli.complete_task_for_current_workspace")
 def test_jira_complete_logs_time_and_frees_workspace(mock_complete):
-    mock_complete.return_value = TaskCompleteResult(
-        log_result=LogTimeResult(
+    def fake_complete(comment, on_logged, confirm_delete, confirm_done):
+        log_result = LogTimeResult(
             workspace_index=1, issue_key="ISD-321", seconds_logged=780, tracker_reset=True
         )
+        on_logged(log_result)
+        freed = confirm_delete(log_result)
+        done = confirm_done(log_result)
+        return TaskCompleteResult(
+            log_result=log_result, workspace_freed=freed, moved_to_done=done
+        )
+
+    mock_complete.side_effect = fake_complete
+
+    result = runner.invoke(
+        app, ["jira", "complete", "--comment", "wrapping up"], input="y\ny\n"
     )
 
-    result = runner.invoke(app, ["jira", "complete", "--comment", "wrapping up"])
-
     assert result.exit_code == 0
-    mock_complete.assert_called_once_with(comment="wrapping up")
+    assert mock_complete.call_args.kwargs["comment"] == "wrapping up"
     assert "Logged 0h 13m 0s to jira:ISD-321 (workspace 2)" in result.stdout
     assert "Freed workspace 2" in result.stdout
+    assert "Moved ISD-321 to 'Done'" in result.stdout
+
+
+@patch("et.cli.complete_task_for_current_workspace")
+def test_jira_complete_skips_cleanup_when_declined(mock_complete):
+    def fake_complete(comment, on_logged, confirm_delete, confirm_done):
+        log_result = LogTimeResult(
+            workspace_index=1, issue_key="ISD-321", seconds_logged=780, tracker_reset=True
+        )
+        on_logged(log_result)
+        freed = confirm_delete(log_result)
+        done = confirm_done(log_result)
+        return TaskCompleteResult(
+            log_result=log_result, workspace_freed=freed, moved_to_done=done
+        )
+
+    mock_complete.side_effect = fake_complete
+
+    result = runner.invoke(app, ["jira", "complete"], input="n\nn\n")
+
+    assert result.exit_code == 0
+    assert "Logged 0h 13m 0s to jira:ISD-321 (workspace 2)" in result.stdout
+    assert "Freed workspace 2" not in result.stdout
+    assert "Moved ISD-321 to 'Done'" not in result.stdout
 
 
 @patch("et.cli.complete_task_for_current_workspace")

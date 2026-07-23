@@ -10,7 +10,7 @@ import typer
 
 from et.config import ConfigError, load_config, load_workspace_names
 from et.jira_ref import jira_key_from_ref
-from et.jira_time import JiraLogTimeError, log_time_for_current_workspace
+from et.jira_time import JiraLogTimeError, LogTimeResult, log_time_for_current_workspace
 from et.task import (
     TaskError,
     complete_task_for_current_workspace,
@@ -366,23 +366,40 @@ def jira_complete(
         None, "--comment", "-m", help="Worklog description/comment to attach in Jira."
     ),
 ) -> None:
-    """Log the active task's tracked time to Jira, then free its workspace slot.
+    """Log the active task's tracked time to Jira, then optionally clean up.
 
-    Equivalent to `et jira log-time` followed by resetting the workspace's
-    config entry back to a bare ET-<n> slot (clearing its name/ref/
-    description), freeing it for a future `et jira start`. No confirmation
-    prompt.
+    Logs the active workspace's tracked time to its Jira issue (like `et
+    jira log-time`), tells you how much was logged, then asks whether to
+    delete the workspace (freeing its slot) and whether to move the linked
+    Jira issue to "Done". Both actions are skipped unless confirmed.
     """
+
+    def on_logged(result: LogTimeResult) -> None:
+        duration = format_duration(result.seconds_logged)
+        typer.echo(
+            f"Logged {duration} to jira:{result.issue_key} "
+            f"(workspace {result.workspace_index + 1})"
+        )
+
+    def confirm_delete(result: LogTimeResult) -> bool:
+        return typer.confirm(f"Delete workspace {result.workspace_index + 1}?")
+
+    def confirm_done(result: LogTimeResult) -> bool:
+        return typer.confirm(f"Move {result.issue_key} to 'Done'?")
+
     try:
-        result = complete_task_for_current_workspace(comment=comment)
+        result = complete_task_for_current_workspace(
+            comment=comment,
+            on_logged=on_logged,
+            confirm_delete=confirm_delete,
+            confirm_done=confirm_done,
+        )
     except (ConfigError, WorkspaceError, JiraLogTimeError, TaskError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
-    log_result = result.log_result
-    duration = format_duration(log_result.seconds_logged)
-    typer.echo(
-        f"Logged {duration} to jira:{log_result.issue_key} "
-        f"(workspace {log_result.workspace_index + 1})"
-    )
-    typer.echo(f"Freed workspace {log_result.workspace_index + 1}")
+    workspace_number = result.log_result.workspace_index + 1
+    if result.workspace_freed:
+        typer.echo(f"Freed workspace {workspace_number}")
+    if result.moved_to_done:
+        typer.echo(f"Moved {result.log_result.issue_key} to 'Done'")

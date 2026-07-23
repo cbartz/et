@@ -9,11 +9,13 @@ switches GNOME to it — moving the terminal window it's run from along with
 it — picking the slot's name/description/Jira link from the user's active
 Jira issues (and offering to move the selected issue to "In Progress" if it
 isn't already). `et jira complete` logs the active workspace's tracked time
-to Jira (reusing `et.jira_time.log_time_for_current_workspace`), resets that
-workspace back to a bare "ET-<n>" slot, and shifts every non-`static`
-slot after it one slot to the left (moving each one's Tracker timer along
-with it) so the freed slot ends up at the end of the non-static range
-rather than leaving a gap in the middle. Has no Typer/CLI dependency.
+to Jira (reusing `et.jira_time.log_time_for_current_workspace`), then — each
+behind its own confirmation prompt — optionally resets that workspace back
+to a bare "ET-<n>" slot (shifting every non-`static` slot after it one slot
+to the left, moving each one's Tracker timer along with it, so the freed slot
+ends up at the end of the non-static range rather than leaving a gap in the
+middle) and/or moves the linked Jira issue to "Done". Has no Typer/CLI
+dependency.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from et.workspaces import WorkspaceError
 from et.ws import shift_workspaces_left
 
 IN_PROGRESS_STATUS = "in progress"
+DONE_STATUS = "done"
 
 
 class TaskError(RuntimeError):
@@ -66,6 +69,8 @@ class TaskCompleteResult:
     """Summary of what `complete_task_for_current_workspace` did."""
 
     log_result: LogTimeResult
+    workspace_freed: bool
+    moved_to_done: bool
 
 
 def _find_free_slot(workspaces_list: list[WorkspaceConfigEntry], count: int) -> int | None:
@@ -168,22 +173,27 @@ def create_task_workspace(
 
 
 
-def _transition_to_in_progress(jira_config: JiraConfig, issue_key: str) -> None:
-    """Move `issue_key` to its "In Progress" transition, if one is available.
+def _transition_to_status(
+    jira_config: JiraConfig, issue_key: str, target_status: str, *, display: str
+) -> None:
+    """Move `issue_key` to the transition whose target status is `target_status`.
 
-    Raises `TaskError` if no such transition exists, or (via `JiraError`)
-    if the Jira API call fails.
+    `target_status` is matched case-insensitively against each available
+    transition's destination status; `display` is the human-readable label
+    used in the error message. Raises `TaskError` if no such transition
+    exists, or (via `JiraError`) if the Jira API call fails.
     """
     try:
         transitions = fetch_transitions(jira_config, issue_key)
     except JiraError as exc:
         raise TaskError(str(exc)) from exc
 
+    normalized = target_status.strip().lower()
     target = next(
-        (t for t in transitions if t.to_status.strip().lower() == IN_PROGRESS_STATUS), None
+        (t for t in transitions if t.to_status.strip().lower() == normalized), None
     )
     if target is None:
-        raise TaskError(f"no transition to 'In Progress' available for {issue_key}")
+        raise TaskError(f"no transition to '{display}' available for {issue_key}")
 
     try:
         transition_issue(jira_config, issue_key, target.id)
@@ -245,7 +255,7 @@ def create_task_from_jira(
         and confirm_transition is not None
         and confirm_transition(issue)
     ):
-        _transition_to_in_progress(config.jira, issue.key)
+        _transition_to_status(config.jira, issue.key, IN_PROGRESS_STATUS, display="In Progress")
 
     return create_task_workspace(
         name=truncate_summary(issue.summary),
@@ -255,27 +265,19 @@ def create_task_from_jira(
     )
 
 
-def complete_task_for_current_workspace(comment: str | None = None) -> TaskCompleteResult:
-    """Log the active workspace's tracked time to Jira, then free its slot.
+def _free_workspace_slot(index: int) -> None:
+    """Reset workspace `index` to a bare "ET-<n>" slot and shift later slots left.
 
-    Delegates the logging step to
-    `et.jira_time.log_time_for_current_workspace` (which already resets the
-    tracker on success); if that succeeds, the workspace's config entry is
-    reset to a bare "ET-<n>" slot (clearing its name/ref/description), and
-    every non-`static` slot after it is shifted one slot to the left (with
-    its Tracker timer) to close the gap, leaving the newly bare slot at the
-    end of the non-static range. GNOME workspace names are renamed to
-    match.
+    Clears the slot's name/ref/description, then shifts every non-`static`
+    slot after it one slot to the left (with its Tracker timer) to close the
+    gap, leaving the newly bare slot at the end of the non-static range.
+    GNOME workspace names are renamed to match.
 
-    Raises `ConfigError`, `WorkspaceError`, or `JiraLogTimeError` (all
-    propagated unchanged from `log_time_for_current_workspace`) if logging
-    fails — in which case the workspace is left untouched.
+    Raises `TaskError` if the underlying config/tracker/GNOME operations
+    fail.
     """
-    log_result = log_time_for_current_workspace(description=comment, reset=True)
-
     config: EtConfig = load_config()
     workspaces_list = list(config.workspaces)
-    index = log_result.workspace_index
     if index < len(workspaces_list):
         workspaces_list[index] = default_entry(index, workspaces_list[index].type)
 
@@ -289,7 +291,60 @@ def complete_task_for_current_workspace(comment: str | None = None) -> TaskCompl
     except (ConfigError, WorkspaceError, TrackerError) as exc:
         raise TaskError(str(exc)) from exc
 
-    return TaskCompleteResult(log_result=log_result)
+
+def complete_task_for_current_workspace(
+    comment: str | None = None,
+    *,
+    on_logged: Callable[[LogTimeResult], None] = lambda result: None,
+    confirm_delete: Callable[[LogTimeResult], bool] = lambda result: False,
+    confirm_done: Callable[[LogTimeResult], bool] = lambda result: False,
+) -> TaskCompleteResult:
+    """Log the active workspace's tracked time to Jira, then optionally clean up.
+
+    Delegates the logging step to
+    `et.jira_time.log_time_for_current_workspace` (which already resets the
+    tracker on success) and, once it succeeds, calls `on_logged(log_result)`
+    so the caller can report the logged time before any prompts.
+
+    Then `confirm_delete(log_result)` is called: if it returns `True`, the
+    workspace's config entry is reset to a bare "ET-<n>" slot (clearing its
+    name/ref/description) and every non-`static` slot after it is shifted one
+    slot to the left (with its Tracker timer) to close the gap, leaving the
+    newly bare slot at the end of the non-static range; GNOME workspace names
+    are renamed to match. If it returns `False`, the workspace is left as-is.
+
+    Finally `confirm_done(log_result)` is called: if it returns `True`, the
+    linked Jira issue is moved through its "Done" transition.
+
+    Raises `ConfigError`, `WorkspaceError`, or `JiraLogTimeError` (all
+    propagated unchanged from `log_time_for_current_workspace`) if logging
+    fails — in which case the workspace and issue are left untouched. Raises
+    `TaskError` if freeing the workspace or transitioning the issue fails.
+    """
+    log_result = log_time_for_current_workspace(description=comment, reset=True)
+    on_logged(log_result)
+
+    workspace_freed = False
+    if confirm_delete(log_result):
+        _free_workspace_slot(log_result.workspace_index)
+        workspace_freed = True
+
+    moved_to_done = False
+    if confirm_done(log_result):
+        config: EtConfig = load_config()
+        if config.jira is None:
+            raise TaskError(
+                "no 'jira' block found in the config file "
+                "(add base_url/email/pat/jql under a top-level 'jira:' key)"
+            )
+        _transition_to_status(config.jira, log_result.issue_key, DONE_STATUS, display="Done")
+        moved_to_done = True
+
+    return TaskCompleteResult(
+        log_result=log_result,
+        workspace_freed=workspace_freed,
+        moved_to_done=moved_to_done,
+    )
 
 
 __all__ = [

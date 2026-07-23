@@ -457,10 +457,13 @@ def test_complete_task_resets_workspace_after_logging(
         ]
     )
 
-    result = complete_task_for_current_workspace(comment="done")
+    result = complete_task_for_current_workspace(
+        comment="done", confirm_delete=lambda _result: True
+    )
 
     mock_log_time.assert_called_once_with(description="done", reset=True)
     assert result.log_result.issue_key == "ISD-2"
+    assert result.workspace_freed is True
 
     saved_config = mock_save_config.call_args[0][0]
     assert saved_config.workspaces[1] == WorkspaceConfigEntry(name="ET-2")
@@ -498,7 +501,7 @@ def test_complete_task_shifts_later_workspaces_and_timers_left(
     c_timer = _timer(2, "ET-3", elapsed=999, running=True)
     mock_load_timers.return_value = [stale_b_timer, c_timer]
 
-    result = complete_task_for_current_workspace()
+    result = complete_task_for_current_workspace(confirm_delete=lambda _result: True)
 
     assert result.log_result.issue_key == "ISD-B"
 
@@ -537,7 +540,7 @@ def test_complete_task_is_noop_shift_when_last_slot_completed(
         ]
     )
 
-    complete_task_for_current_workspace()
+    complete_task_for_current_workspace(confirm_delete=lambda _result: True)
 
     saved_config = mock_save_config.call_args[0][0]
     assert saved_config.workspaces == [
@@ -566,7 +569,7 @@ def test_complete_task_does_not_shift_static_slots(
         ]
     )
 
-    complete_task_for_current_workspace()
+    complete_task_for_current_workspace(confirm_delete=lambda _result: True)
 
     saved_config = mock_save_config.call_args[0][0]
     assert saved_config.workspaces == [
@@ -596,7 +599,7 @@ def test_complete_task_wraps_workspace_error_after_logging(
     mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ISD-2", ref="jira:ISD-2")])
 
     with pytest.raises(TaskError, match="rename boom"):
-        complete_task_for_current_workspace()
+        complete_task_for_current_workspace(confirm_delete=lambda _result: True)
 
 
 @patch("et.task.tracker.load_timers", side_effect=TrackerError("no schema"))
@@ -611,5 +614,84 @@ def test_complete_task_wraps_tracker_error_loading_timers(
     mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ISD-2", ref="jira:ISD-2")])
 
     with pytest.raises(TaskError, match="no schema"):
-        complete_task_for_current_workspace()
+        complete_task_for_current_workspace(confirm_delete=lambda _result: True)
 
+
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_reports_logged_time_before_prompts(mock_log_time, mock_load_config):
+    log_result = LogTimeResult(
+        workspace_index=0, issue_key="ISD-2", seconds_logged=780, tracker_reset=True
+    )
+    mock_log_time.return_value = log_result
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ISD-2", ref="jira:ISD-2")])
+    seen: list[LogTimeResult] = []
+
+    result = complete_task_for_current_workspace(on_logged=seen.append)
+
+    assert seen == [log_result]
+    assert result.workspace_freed is False
+    assert result.moved_to_done is False
+
+
+@patch("et.task.workspaces.rename_all_workspaces")
+@patch("et.task.save_config")
+@patch("et.task.tracker.load_timers", return_value=[])
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_leaves_workspace_when_delete_declined(
+    mock_log_time, mock_load_config, _mock_load_timers, mock_save_config, mock_rename_all
+):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=0, issue_key="ISD-2", seconds_logged=780, tracker_reset=True
+    )
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ISD-2", ref="jira:ISD-2")])
+
+    result = complete_task_for_current_workspace(confirm_delete=lambda _result: False)
+
+    assert result.workspace_freed is False
+    mock_save_config.assert_not_called()
+    mock_rename_all.assert_not_called()
+
+
+@patch("et.task.transition_issue")
+@patch("et.task.fetch_transitions")
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_moves_issue_to_done_when_confirmed(
+    mock_log_time, mock_load_config, mock_fetch_transitions, mock_transition_issue
+):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=0, issue_key="ISD-2", seconds_logged=780, tracker_reset=True
+    )
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ISD-2", ref="jira:ISD-2")])
+    mock_fetch_transitions.return_value = [
+        JiraTransition(id="11", name="Start progress", to_status="In Progress"),
+        JiraTransition(id="31", name="Close", to_status="Done"),
+    ]
+
+    result = complete_task_for_current_workspace(confirm_done=lambda _result: True)
+
+    assert result.moved_to_done is True
+    mock_transition_issue.assert_called_once_with(_config().jira, "ISD-2", "31")
+
+
+@patch("et.task.transition_issue")
+@patch("et.task.fetch_transitions")
+@patch("et.task.load_config")
+@patch("et.task.log_time_for_current_workspace")
+def test_complete_task_raises_when_no_done_transition_available(
+    mock_log_time, mock_load_config, mock_fetch_transitions, mock_transition_issue
+):
+    mock_log_time.return_value = LogTimeResult(
+        workspace_index=0, issue_key="ISD-2", seconds_logged=780, tracker_reset=True
+    )
+    mock_load_config.return_value = _config([WorkspaceConfigEntry(name="ISD-2", ref="jira:ISD-2")])
+    mock_fetch_transitions.return_value = [
+        JiraTransition(id="11", name="Start progress", to_status="In Progress"),
+    ]
+
+    with pytest.raises(TaskError, match="no transition to 'Done' available"):
+        complete_task_for_current_workspace(confirm_done=lambda _result: True)
+
+    mock_transition_issue.assert_not_called()

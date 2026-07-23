@@ -17,7 +17,7 @@ log time against them.
   layer that creates a workspace + Tracker timer for a task (picked
   straight from your active Jira issues, optionally moving it to "In
   Progress"), and completes it by logging its tracked time to Jira and
-  freeing the slot.
+  optionally freeing the slot and moving the issue to "Done".
 
 ## Requirements
 
@@ -122,7 +122,7 @@ working exactly as before.
 et info                                      # (or bare `et`) show the active task's Jira issue and time spent
 et jira start                                # pick an active Jira issue and start a task from it
 et jira log-time                             # log the active workspace's tracked time to Jira
-et jira complete                             # log time, then free the workspace
+et jira complete                             # log time, then optionally free the workspace and close the issue
 ```
 
 `et` with no subcommand shows the same Jira issue details as before, plus
@@ -158,11 +158,15 @@ is required. On success the tracker is reset to 0, unless `--no-reset` is
 given.
 
 `et jira complete` logs the active workspace's tracked time to Jira (like
-`et jira log-time`, no confirmation prompt) and then resets that workspace
-back to a bare `ET-<n>` slot. Every non-`static` workspace after it is then
-shifted one slot to the left (its Tracker timer follows it), so the freed
-slot ends up at the end of the non-static range — ready for a future `et
-jira start` — instead of leaving a gap in the middle of your workspaces.
+`et jira log-time`) and tells you how much it logged. It then asks whether
+to delete the workspace and whether to move the linked Jira issue to
+"Done" — each behind its own confirmation prompt, so both actions are
+skipped unless you confirm them. When you confirm the delete, the workspace
+is reset back to a bare `ET-<n>` slot and every non-`static` workspace after
+it is shifted one slot to the left (its Tracker timer follows it), so the
+freed slot ends up at the end of the non-static range — ready for a future
+`et jira start` — instead of leaving a gap in the middle of your
+workspaces.
 
 ## Configuration
 
