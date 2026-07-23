@@ -161,7 +161,17 @@ def delete_active_workspace(*, force: bool = False) -> WsDeleteResult:
         raise WsDeleteError(str(exc)) from exc
 
     workspaces_list[index] = default_entry(index, entry.type)
+
+    # Discard the deleted workspace's own Tracker timer up front. The shift
+    # below only removes it as a side effect of moving a later timer into
+    # this slot, so it would be left orphaned when there's nothing to shift
+    # (e.g. deleting the last non-static workspace).
+    deleted_timer = find_timer_for_workspace(entries, index)
+    if deleted_timer is not None:
+        entries.remove(deleted_timer)
+
     timers_changed = shift_workspaces_left(workspaces_list, entries, index)
+    timers_changed = timers_changed or deleted_timer is not None
 
     # Reclaim the freed slot by shrinking GNOME's workspace count, unless the
     # highest-numbered workspace is static (shrinking removes the last GNOME

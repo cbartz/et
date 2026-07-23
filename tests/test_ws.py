@@ -344,7 +344,12 @@ def test_delete_active_workspace_force_last_slot_discards_timer(
     mock_set_count.assert_called_once_with(1)
     mock_rename_all.assert_called_once_with(["ISD-A"])
     mock_switch.assert_called_once_with(0)
-    mock_save_timers.assert_not_called()  # deleted slot was last; nothing to shift
+    # Deleting the last non-static slot has nothing to shift, but the deleted
+    # workspace's own timer must still be discarded rather than orphaned.
+    mock_save_timers.assert_called_once()
+    saved_timers = mock_save_timers.call_args[0][0]
+    assert b_timer not in saved_timers
+    assert saved_timers == []
 
 
 @patch("et.ws.workspaces.switch_to_workspace")
