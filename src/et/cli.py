@@ -370,8 +370,9 @@ def jira_complete(
 
     Logs the active workspace's tracked time to its Jira issue (like `et
     jira log-time`), tells you how much was logged, then asks whether to
-    delete the workspace (freeing its slot) and whether to move the linked
-    Jira issue to "Done". Both actions are skipped unless confirmed.
+    delete the workspace (reclaiming its GNOME workspace slot) and whether
+    to move the linked Jira issue to "Done". Both actions are skipped unless
+    confirmed.
     """
 
     def on_logged(result: LogTimeResult) -> None:
@@ -400,6 +401,6 @@ def jira_complete(
 
     workspace_number = result.log_result.workspace_index + 1
     if result.workspace_freed:
-        typer.echo(f"Freed workspace {workspace_number}")
+        typer.echo(f"Deleted workspace {workspace_number}")
     if result.moved_to_done:
         typer.echo(f"Moved {result.log_result.issue_key} to 'Done'")

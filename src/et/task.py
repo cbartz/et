@@ -10,12 +10,12 @@ it — picking the slot's name/description/Jira link from the user's active
 Jira issues (and offering to move the selected issue to "In Progress" if it
 isn't already). `et jira complete` logs the active workspace's tracked time
 to Jira (reusing `et.jira_time.log_time_for_current_workspace`), then — each
-behind its own confirmation prompt — optionally resets that workspace back
-to a bare "ET-<n>" slot (shifting every non-`static` slot after it one slot
-to the left, moving each one's Tracker timer along with it, so the freed slot
-ends up at the end of the non-static range rather than leaving a gap in the
-middle) and/or moves the linked Jira issue to "Done". Has no Typer/CLI
-dependency.
+behind its own confirmation prompt — optionally deletes that workspace
+(reclaiming its GNOME workspace slot the same way `et ws delete` does:
+shrinking GNOME's workspace count and shifting every non-`static` slot
+after it one slot to the left, moving each one's Tracker timer along with
+it, then switching to a surviving workspace) and/or moves the linked Jira
+issue to "Done". Has no Typer/CLI dependency.
 """
 
 from __future__ import annotations
@@ -41,9 +41,9 @@ from et.jira import (
 )
 from et.jira_ref import JIRA_REF_PREFIX, default_entry, jira_key_from_ref, truncate_summary
 from et.jira_time import LogTimeResult, log_time_for_current_workspace
-from et.tracker import TrackerError
+from et.tracker import TrackerError, find_timer_for_workspace
 from et.workspaces import WorkspaceError
-from et.ws import shift_workspaces_left
+from et.ws import WsDeleteError, delete_active_workspace
 
 IN_PROGRESS_STATUS = "in progress"
 DONE_STATUS = "done"
@@ -266,15 +266,48 @@ def create_task_from_jira(
 
 
 def _free_workspace_slot(index: int) -> None:
-    """Reset workspace `index` to a bare "ET-<n>" slot and shift later slots left.
+    """Delete the completed workspace, reclaiming its GNOME workspace slot.
 
-    Clears the slot's name/ref/description, then shifts every non-`static`
-    slot after it one slot to the left (with its Tracker timer) to close the
-    gap, leaving the newly bare slot at the end of the non-static range.
-    GNOME workspace names are renamed to match.
+    Delegates to `delete_active_workspace` — the same logic `et ws delete`
+    uses — so the workspace is actually removed rather than merely blanked:
+    GNOME's workspace count is decremented, every non-`static` slot after
+    the freed one (and its Tracker timer) shifts one slot to the left to
+    close the gap, and GNOME switches to a surviving workspace. `force=True`
+    because the slot is still linked to the just-completed Jira issue (whose
+    Tracker timer was already reset to zero by the logging step, so
+    discarding it loses nothing).
+
+    Falls back to resetting the slot to a bare "ET-<n>" entry (without
+    touching GNOME's workspace count) when there is only a single workspace
+    left, since GNOME can't drop below one workspace.
 
     Raises `TaskError` if the underlying config/tracker/GNOME operations
     fail.
+    """
+    try:
+        count = workspaces.get_workspace_count()
+    except WorkspaceError as exc:
+        raise TaskError(str(exc)) from exc
+
+    if count <= 1:
+        _reset_workspace_slot(index)
+        return
+
+    try:
+        delete_active_workspace(force=True)
+    except (ConfigError, WorkspaceError, WsDeleteError) as exc:
+        raise TaskError(str(exc)) from exc
+
+
+def _reset_workspace_slot(index: int) -> None:
+    """Reset workspace `index` to a bare "ET-<n>" slot and drop its timer.
+
+    Used when the workspace can't be reclaimed by shrinking GNOME's
+    workspace count (only one workspace remains): clears the slot's
+    name/ref/description and discards its (already-reset) Tracker timer,
+    leaving GNOME's workspace count untouched.
+
+    Raises `TaskError` if the underlying config/tracker operations fail.
     """
     config: EtConfig = load_config()
     workspaces_list = list(config.workspaces)
@@ -283,9 +316,10 @@ def _free_workspace_slot(index: int) -> None:
 
     try:
         entries = tracker.load_timers()
-        timers_changed = shift_workspaces_left(workspaces_list, entries, index)
-        if timers_changed:
-            tracker.save_timers_with_reload(entries, "shifting timers after completing a task")
+        stale_timer = find_timer_for_workspace(entries, index)
+        if stale_timer is not None:
+            entries.remove(stale_timer)
+            tracker.save_timers_with_reload(entries, "clearing timer after completing a task")
         save_config(replace(config, workspaces=workspaces_list))
         workspaces.rename_all_workspaces([entry.name for entry in workspaces_list])
     except (ConfigError, WorkspaceError, TrackerError) as exc:
@@ -307,11 +341,14 @@ def complete_task_for_current_workspace(
     so the caller can report the logged time before any prompts.
 
     Then `confirm_delete(log_result)` is called: if it returns `True`, the
-    workspace's config entry is reset to a bare "ET-<n>" slot (clearing its
-    name/ref/description) and every non-`static` slot after it is shifted one
-    slot to the left (with its Tracker timer) to close the gap, leaving the
-    newly bare slot at the end of the non-static range; GNOME workspace names
-    are renamed to match. If it returns `False`, the workspace is left as-is.
+    workspace is deleted the same way `et ws delete` does — GNOME's
+    workspace count is decremented to reclaim the slot, every non-`static`
+    slot after it (with its Tracker timer) shifts one slot to the left to
+    close the gap, GNOME workspace names are renamed to match, and GNOME
+    switches to a surviving workspace. When only a single workspace remains
+    (so GNOME can't shrink further) the slot is just reset to a bare
+    "ET-<n>" entry instead. If it returns `False`, the workspace is left
+    as-is.
 
     Finally `confirm_done(log_result)` is called: if it returns `True`, the
     linked Jira issue is moved through its "Done" transition.

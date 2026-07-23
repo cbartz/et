@@ -122,7 +122,7 @@ working exactly as before.
 et info                                      # (or bare `et`) show the active task's Jira issue and time spent
 et jira start                                # pick an active Jira issue and start a task from it
 et jira log-time                             # log the active workspace's tracked time to Jira
-et jira complete                             # log time, then optionally free the workspace and close the issue
+et jira complete                             # log time, then optionally delete the workspace and close the issue
 ```
 
 `et` with no subcommand shows the same Jira issue details as before, plus
@@ -162,11 +162,11 @@ given.
 to delete the workspace and whether to move the linked Jira issue to
 "Done" — each behind its own confirmation prompt, so both actions are
 skipped unless you confirm them. When you confirm the delete, the workspace
-is reset back to a bare `ET-<n>` slot and every non-`static` workspace after
-it is shifted one slot to the left (its Tracker timer follows it), so the
-freed slot ends up at the end of the non-static range — ready for a future
-`et jira start` — instead of leaving a gap in the middle of your
-workspaces.
+is removed exactly like `et ws delete` — GNOME's workspace count is
+decremented to reclaim the slot and every non-`static` workspace after it is
+shifted one slot to the left (its Tracker timer follows it), so no gap is
+left in the middle of your workspaces. If only a single workspace remains
+(GNOME can't drop below one), its slot is reset to a bare `ET-<n>` instead.
 
 ## Configuration
 

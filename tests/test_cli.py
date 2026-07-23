@@ -419,7 +419,7 @@ def test_jira_complete_logs_time_and_frees_workspace(mock_complete):
     assert result.exit_code == 0
     assert mock_complete.call_args.kwargs["comment"] == "wrapping up"
     assert "Logged 0h 13m 0s to jira:ISD-321 (workspace 2)" in result.stdout
-    assert "Freed workspace 2" in result.stdout
+    assert "Deleted workspace 2" in result.stdout
     assert "Moved ISD-321 to 'Done'" in result.stdout
 
 
@@ -442,7 +442,7 @@ def test_jira_complete_skips_cleanup_when_declined(mock_complete):
 
     assert result.exit_code == 0
     assert "Logged 0h 13m 0s to jira:ISD-321 (workspace 2)" in result.stdout
-    assert "Freed workspace 2" not in result.stdout
+    assert "Deleted workspace 2" not in result.stdout
     assert "Moved ISD-321 to 'Done'" not in result.stdout
 
 
