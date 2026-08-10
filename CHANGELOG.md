@@ -6,6 +6,17 @@ All notable changes to `et` are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- `et jira create [GITHUB_URL]`: interactively create a Jira issue —
+  prompts for type (Bug/Story/Task), summary, self-assignment, priority,
+  component (3-column picker), current sprint, estimate hours, and
+  description, then shows a confirmation summary before creating.
+  Optionally pre-fills summary/description (and defaults type to Bug) from
+  a GitHub issue/PR URL via the `gh` CLI, and populates Jira's "Bug link"
+  custom field with that URL when the field exists.
+- Auto-discovers and caches the project's Agile board id
+  (`jira.board_id`), preferring Scrum boards since Kanban boards don't
+  support sprints; falls back to a fresh Scrum-board lookup (and persists
+  the correction) if a cached board turns out not to support sprints.
 - `et ws organize`: reorder dynamic workspaces by editing their order in
   `$EDITOR` (static workspaces stay pinned). Shows a before/after summary
   (old/new index, name, linked Jira issue, Tracker time) and asks for
@@ -13,6 +24,11 @@ All notable changes to `et` are documented here. Format loosely follows
   its new slot.
 
 ### Changed
+- Config gains `jira.project_key` and `jira.board_id`.
+- Jira issue references (`et jira log-time`, `et jira complete`) are now
+  clickable OSC 8 terminal hyperlinks, like `et jira start` already was.
+- `et jira start`'s "move to In Progress?" and "add another workspace?"
+  prompts now default to yes.
 - `et jira complete` now actually deletes the freed GNOME workspace instead
   of leaving an empty slot, and prompts for confirmation before freeing the
   workspace and closing the linked Jira issue.
