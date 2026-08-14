@@ -44,6 +44,10 @@ All notable changes to `et` are documented here. Format loosely follows
   showing workspace names on-screen.
 
 ### Fixed
+- Jira issue search no longer stops at the first empty page of results.
+  Jira's `/search/jql` bounded scan can return an empty page that still
+  carries a `nextPageToken`, which made `et jira start` report "No active
+  Jira issues available" for a JQL that matches issues in the Jira UI.
 - Removed dead code, stale docs, and assorted inconsistencies uncovered
   during cleanup.
 

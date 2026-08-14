@@ -145,6 +145,20 @@ def test_fetch_active_issues_follows_next_page_token_pagination(mock_get):
     assert {issue.key for issue in issues} == {"PROJ-1", "PROJ-2"}
 
 
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_follows_pagination_past_empty_pages(mock_get):
+    """Jira's bounded scan can return an empty page that still has a next page."""
+    mock_get.side_effect = [
+        _response([], next_page_token="page-2"),
+        _response([_issue("PROJ-1", "Task behind an empty page", "High")]),
+    ]
+
+    issues = fetch_active_issues(_config())
+
+    assert mock_get.call_count == 2
+    assert [issue.key for issue in issues] == ["PROJ-1"]
+
+
 @patch("et.jira.requests.get", side_effect=requests.ConnectionError("no route to host"))
 def test_fetch_active_issues_wraps_network_errors(mock_get):
     with pytest.raises(JiraError, match="no route to host"):

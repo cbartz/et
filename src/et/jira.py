@@ -398,8 +398,10 @@ def _fetch_issue_pages(jira_config: JiraConfig, url: str) -> list[object]:
 
         all_issues_raw.extend(issues_raw)
 
+        # Jira's bounded scan may hand back an empty page that still has a
+        # nextPageToken, so only the missing token means "no more results".
         next_page_token = payload.get("nextPageToken") if isinstance(payload, dict) else None
-        if not next_page_token or not issues_raw:
+        if not next_page_token:
             break
 
     return all_issues_raw
