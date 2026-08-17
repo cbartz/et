@@ -371,6 +371,8 @@ def _fetch_issue_pages(jira_config: JiraConfig, url: str) -> list[object]:
         if next_page_token is not None:
             params["nextPageToken"] = next_page_token
 
+        logger.debug("GET %s as %s with params %r", url, jira_config.email, params)
+
         try:
             response = requests.get(
                 url,
@@ -395,6 +397,9 @@ def _fetch_issue_pages(jira_config: JiraConfig, url: str) -> list[object]:
         issues_raw = payload.get("issues") if isinstance(payload, dict) else None
         if not isinstance(issues_raw, list):
             raise JiraError(f"unexpected Jira API response from {url}: no 'issues' list")
+
+        keys = [issue.get("key", "?") for issue in issues_raw if isinstance(issue, dict)]
+        logger.debug("  -> %d issue(s): %s", len(issues_raw), keys)
 
         all_issues_raw.extend(issues_raw)
 

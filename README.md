@@ -232,6 +232,16 @@ Per-entry keys: `name` (required), `type` (`dynamic` (default) or `static`),
 `ref` (e.g. `jira:ISD-321`), and `description`. The config file is written
 with mode `0600` because it may contain a Jira API token.
 
+The `jql` value is a plain YAML scalar, so quoting it is optional — quote
+it only if it starts with a character YAML reserves (`{`, `[`, `*`, `&`,
+`!`, `%`, `@`) or contains ` #` or `: `.
+
+When `et jira start` reports no issues but the same JQL finds some in the
+Jira web UI, run `et --debug jira start`: it logs each search request (URL,
+the exact JQL sent, the account it authenticates as) and the issue keys
+each page returns, which distinguishes "Jira returned nothing" from "the
+issues were filtered out as already linked to a workspace".
+
 > **Note:** `et` requires a *fixed* number of GNOME workspaces
 > (`org.gnome.mutter dynamic-workspaces = false`) so the `ET-<n>` slots
 > always exist. If dynamic workspaces are enabled, `et` exits with

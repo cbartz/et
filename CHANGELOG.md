@@ -17,6 +17,10 @@ All notable changes to `et` are documented here. Format loosely follows
   (`jira.board_id`), preferring Scrum boards since Kanban boards don't
   support sprints; falls back to a fresh Scrum-board lookup (and persists
   the correction) if a cached board turns out not to support sprints.
+- `et --debug`: logs every Jira search request (URL, the exact JQL sent,
+  the authenticating account) and the issue keys each page returns, for
+  diagnosing "No active Jira issues available" against a JQL that finds
+  issues in the Jira web UI.
 - `et ws organize`: reorder dynamic workspaces by editing their order in
   `$EDITOR` (static workspaces stay pinned). Shows a before/after summary
   (old/new index, name, linked Jira issue, Tracker time) and asks for

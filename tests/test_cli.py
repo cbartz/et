@@ -3,6 +3,7 @@ of the underlying config/tracker/workspace/jira modules."""
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -358,6 +359,15 @@ def test_root_exits_when_dynamic_workspaces_enabled(_mock_dynamic):
     assert result.exit_code == 1
     assert "dynamic workspaces are enabled" in result.output
     assert "gsettings set org.gnome.mutter dynamic-workspaces false" in result.output
+
+
+@patch("et.cli.is_dynamic_workspaces_enabled", return_value=False)
+def test_root_debug_flag_enables_debug_logging(_mock_dynamic):
+    logging.getLogger().setLevel(logging.WARNING)
+
+    runner.invoke(app, ["--debug", "ws", "delete"])
+
+    assert logging.getLogger().isEnabledFor(logging.DEBUG)
 
 
 @patch("et.cli.is_dynamic_workspaces_enabled", side_effect=WorkspaceError("gsettings missing"))

@@ -146,6 +146,23 @@ def test_fetch_active_issues_follows_next_page_token_pagination(mock_get):
 
 
 @patch("et.jira.requests.get")
+def test_fetch_active_issues_logs_request_and_page_sizes_at_debug(mock_get, caplog):
+    mock_get.side_effect = [
+        _response([], next_page_token="page-2"),
+        _response([_issue("PROJ-1", "Task", "High")]),
+    ]
+
+    with caplog.at_level("DEBUG", logger="et.jira"):
+        fetch_active_issues(_config(jql="assignee = currentUser() AND statusCategory != Done"))
+
+    assert "assignee = currentUser() AND statusCategory != Done" in caplog.text
+    assert "https://example.atlassian.net/rest/api/3/search/jql" in caplog.text
+    assert "0 issue(s)" in caplog.text
+    assert "1 issue(s)" in caplog.text
+    assert "secret-token" not in caplog.text
+
+
+@patch("et.jira.requests.get")
 def test_fetch_active_issues_follows_pagination_past_empty_pages(mock_get):
     """Jira's bounded scan can return an empty page that still has a next page."""
     mock_get.side_effect = [
