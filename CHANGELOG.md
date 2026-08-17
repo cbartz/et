@@ -17,6 +17,10 @@ All notable changes to `et` are documented here. Format loosely follows
   (`jira.board_id`), preferring Scrum boards since Kanban boards don't
   support sprints; falls back to a fresh Scrum-board lookup (and persists
   the correction) if a cached board turns out not to support sprints.
+- `et --debug`: logs every Jira search request (URL, the exact JQL sent,
+  the authenticating account) and the issue keys each page returns, for
+  diagnosing "No active Jira issues available" against a JQL that finds
+  issues in the Jira web UI.
 - `et ws organize`: reorder dynamic workspaces by editing their order in
   `$EDITOR` (static workspaces stay pinned). Shows a before/after summary
   (old/new index, name, linked Jira issue, Tracker time) and asks for
@@ -44,6 +48,14 @@ All notable changes to `et` are documented here. Format loosely follows
   showing workspace names on-screen.
 
 ### Fixed
+- Rejected Jira credentials are now reported as such instead of as an
+  empty issue list. Jira answers an unauthenticated search anonymously
+  (HTTP 200 with no issues), so `et` verifies the credentials against
+  `/rest/api/3/myself` whenever a search returns nothing.
+- Jira issue search no longer stops at the first empty page of results.
+  Jira's `/search/jql` bounded scan can return an empty page that still
+  carries a `nextPageToken`, which made `et jira start` report "No active
+  Jira issues available" for a JQL that matches issues in the Jira UI.
 - Removed dead code, stale docs, and assorted inconsistencies uncovered
   during cleanup.
 

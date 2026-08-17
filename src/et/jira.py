@@ -23,6 +23,7 @@ SEARCH_PATH = "rest/api/3/search/jql"
 WORKLOG_PATH_TEMPLATE = "rest/api/3/issue/{key}/worklog"
 TRANSITIONS_PATH_TEMPLATE = "rest/api/3/issue/{key}/transitions"
 USER_SEARCH_PATH = "rest/api/3/user/search"
+MYSELF_PATH = "rest/api/3/myself"
 COMPONENTS_PATH_TEMPLATE = "rest/api/3/project/{key}/components"
 FIELD_PATH = "rest/api/3/field"
 ISSUE_PATH = "rest/api/3/issue"
@@ -371,6 +372,8 @@ def _fetch_issue_pages(jira_config: JiraConfig, url: str) -> list[object]:
         if next_page_token is not None:
             params["nextPageToken"] = next_page_token
 
+        logger.debug("GET %s as %s with params %r", url, jira_config.email, params)
+
         try:
             response = requests.get(
                 url,
@@ -396,13 +399,42 @@ def _fetch_issue_pages(jira_config: JiraConfig, url: str) -> list[object]:
         if not isinstance(issues_raw, list):
             raise JiraError(f"unexpected Jira API response from {url}: no 'issues' list")
 
+        keys = [issue.get("key", "?") for issue in issues_raw if isinstance(issue, dict)]
+        logger.debug("  -> %d issue(s): %s", len(issues_raw), keys)
+
         all_issues_raw.extend(issues_raw)
 
+        # Jira's bounded scan may hand back an empty page that still has a
+        # nextPageToken, so only the missing token means "no more results".
         next_page_token = payload.get("nextPageToken") if isinstance(payload, dict) else None
-        if not next_page_token or not issues_raw:
+        if not next_page_token:
             break
 
     return all_issues_raw
+
+
+def _check_credentials(jira_config: JiraConfig) -> None:
+    """Raise `JiraError` if Jira doesn't accept `jira_config`'s email/token.
+
+    Unlike the search endpoint, `/myself` has no anonymous mode: it answers
+    401 when the credentials aren't usable. A network failure here is
+    ignored, since the caller's own request already succeeded.
+    """
+    url = jira_config.base_url.rstrip("/") + "/" + MYSELF_PATH
+
+    try:
+        response = requests.get(url, auth=(jira_config.email, jira_config.pat), timeout=30)
+    except requests.RequestException:
+        return
+
+    logger.debug("credential check: GET %s -> %d", url, response.status_code)
+
+    if response.status_code in (401, 403):
+        raise JiraError(
+            f"Jira rejected your credentials (status {response.status_code}): check jira.email "
+            f"and jira.pat in your config file. Jira Cloud API tokens expire, and a truncated "
+            f"or stale token makes searches return no issues instead of failing outright."
+        )
 
 
 def fetch_active_issues(jira_config: JiraConfig) -> list[JiraIssue]:
@@ -412,9 +444,17 @@ def fetch_active_issues(jira_config: JiraConfig) -> list[JiraIssue]:
     broken by the order the API returned them in); issues whose priority
     name isn't in that list sort after all known priorities, with a warning
     printed to stderr for each one.
+
+    Raises `JiraError` if Jira rejects the configured credentials, which an
+    empty result set can otherwise hide (see `_check_credentials`).
     """
     url = jira_config.base_url.rstrip("/") + "/" + SEARCH_PATH
     issues_raw = _fetch_issue_pages(jira_config, url)
+
+    # Jira serves an unauthenticated search anonymously rather than
+    # refusing it, so a bad token looks like "you have no issues".
+    if not issues_raw:
+        _check_credentials(jira_config)
 
     issues: list[JiraIssue] = []
     for raw_issue in issues_raw:

@@ -79,7 +79,12 @@ app.add_typer(jira_app, name="jira")
 
 
 @app.callback(invoke_without_command=True)
-def _root(ctx: typer.Context) -> None:
+def _root(
+    ctx: typer.Context,
+    debug: bool = typer.Option(
+        False, "--debug", help="Log the Jira API requests et makes (URL, JQL, results)."
+    ),
+) -> None:
     """Send library warnings (e.g. from et.jira) to stderr.
 
     With no subcommand, shows the same info as `et info` (and `et jira
@@ -87,7 +92,11 @@ def _root(ctx: typer.Context) -> None:
     active workspace) when that workspace is part of the managed
     (non-`static`) pool; otherwise falls back to the regular help text.
     """
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.WARNING,
+        format="%(levelname)s: %(message)s",
+        force=True,
+    )
 
     _ensure_static_workspaces()
 
