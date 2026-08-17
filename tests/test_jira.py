@@ -79,7 +79,7 @@ def test_fetch_active_issues_passes_jql_and_basic_auth(mock_get):
 
     fetch_active_issues(config)
 
-    args, kwargs = mock_get.call_args
+    args, kwargs = mock_get.call_args_list[0]
     assert args[0] == "https://example.atlassian.net/rest/api/3/search/jql"
     assert kwargs["params"] == {"jql": config.jql, "fields": "summary,priority,status"}
     assert kwargs["auth"] == (config.email, config.pat)
@@ -143,6 +143,38 @@ def test_fetch_active_issues_follows_next_page_token_pagination(mock_get):
     assert "nextPageToken" not in first_kwargs["params"]
     assert second_kwargs["params"]["nextPageToken"] == "page-2"
     assert {issue.key for issue in issues} == {"PROJ-1", "PROJ-2"}
+
+
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_reports_rejected_credentials_when_no_issues_match(mock_get):
+    """Jira answers an unauthenticated search with 200 and no issues, not 401."""
+    unauthorized = MagicMock()
+    unauthorized.status_code = 401
+    unauthorized.text = "Client must be authenticated to access this resource."
+    mock_get.side_effect = [_response([]), unauthorized]
+
+    with pytest.raises(JiraError, match="credentials"):
+        fetch_active_issues(_config())
+
+    assert mock_get.call_args_list[1].args[0].endswith("/rest/api/3/myself")
+
+
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_returns_empty_when_credentials_are_accepted(mock_get):
+    accepted = MagicMock()
+    accepted.status_code = 200
+    mock_get.side_effect = [_response([]), accepted]
+
+    assert fetch_active_issues(_config()) == []
+
+
+@patch("et.jira.requests.get")
+def test_fetch_active_issues_skips_credential_check_when_issues_match(mock_get):
+    mock_get.return_value = _response([_issue("PROJ-1", "Task", "High")])
+
+    fetch_active_issues(_config())
+
+    assert mock_get.call_count == 1
 
 
 @patch("et.jira.requests.get")

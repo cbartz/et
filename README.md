@@ -242,6 +242,11 @@ the exact JQL sent, the account it authenticates as) and the issue keys
 each page returns, which distinguishes "Jira returned nothing" from "the
 issues were filtered out as already linked to a workspace".
 
+An expired or truncated `pat` is reported as such rather than as an empty
+issue list: Jira serves an unauthenticated search anonymously (HTTP 200,
+no issues) instead of refusing it, so `et` re-checks the credentials
+against `/rest/api/3/myself` whenever a search comes back empty.
+
 > **Note:** `et` requires a *fixed* number of GNOME workspaces
 > (`org.gnome.mutter dynamic-workspaces = false`) so the `ET-<n>` slots
 > always exist. If dynamic workspaces are enabled, `et` exits with

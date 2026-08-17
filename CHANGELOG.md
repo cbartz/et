@@ -48,6 +48,10 @@ All notable changes to `et` are documented here. Format loosely follows
   showing workspace names on-screen.
 
 ### Fixed
+- Rejected Jira credentials are now reported as such instead of as an
+  empty issue list. Jira answers an unauthenticated search anonymously
+  (HTTP 200 with no issues), so `et` verifies the credentials against
+  `/rest/api/3/myself` whenever a search returns nothing.
 - Jira issue search no longer stops at the first empty page of results.
   Jira's `/search/jql` bounded scan can return an empty page that still
   carries a `nextPageToken`, which made `et jira start` report "No active
