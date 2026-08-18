@@ -15,7 +15,14 @@ behind its own confirmation prompt — optionally deletes that workspace
 shrinking GNOME's workspace count and shifting every non-`static` slot
 after it one slot to the left, moving each one's Tracker timer along with
 it, then switching to a surviving workspace) and/or moves the linked Jira
-issue to "Done". Has no Typer/CLI dependency.
+issue to "Done". `et jira status`/`et jira comment` reuse the same
+active-workspace-to-issue-key resolution (`et.jira_time.resolve_issue_key`,
+or `resolve_active_issue` when the workspace index is also needed)
+to transition the linked issue's status or add a comment to it. Every
+current-ticket action also accepts an `issue_key` override (`et jira`'s
+`-j/--jira KEY`), letting it target a different Jira issue than the one
+linked to the active workspace. Has no
+Typer/CLI dependency.
 """
 
 from __future__ import annotations
@@ -35,18 +42,36 @@ from et.config import (
 from et.jira import (
     JiraError,
     JiraIssue,
+    create_comment,
     fetch_active_issues,
+    fetch_issue_status,
     fetch_transitions,
     transition_issue,
 )
 from et.jira_ref import JIRA_REF_PREFIX, default_entry, jira_key_from_ref, truncate_summary
-from et.jira_time import LogTimeResult, log_time_for_current_workspace
+from et.jira_time import LogTimeResult, log_time_for_current_workspace, resolve_issue_key
 from et.tracker import TrackerError, find_timer_for_workspace
 from et.workspaces import WorkspaceError
 from et.ws import WsDeleteError, delete_active_workspace
 
 IN_PROGRESS_STATUS = "in progress"
 DONE_STATUS = "done"
+BLOCKED_STATUS = "blocked"
+
+# Hardcoded, workflow-ordered (todo -> done) list of statuses offered by
+# `et jira status`'s interactive (no-argument) prompt. Kept as a fixed list
+# rather than fetched live from Jira per the team's fixed workflow shape;
+# transitioning still validates against the live `fetch_transitions` API.
+STATUS_WORKFLOW_ORDER = [
+    "Untriaged",
+    "Triaged",
+    "In Progress",
+    "Blocked",
+    "In Review",
+    "To Be Deployed",
+    "Done",
+    "Rejected",
+]
 
 
 class TaskError(RuntimeError):
@@ -201,6 +226,79 @@ def _transition_to_status(
         raise TaskError(str(exc)) from exc
 
 
+def set_status_for_current_workspace(status: str, *, issue_key: str | None = None) -> str:
+    """Move the linked Jira issue to `status`.
+
+    Resolves the issue to act on the same way `et jira log-time` does
+    (the active workspace's linked issue, or `issue_key` if given, e.g. via
+    `-j/--jira`), then transitions it to the workflow transition whose
+    destination status matches `status` (case-insensitively) via
+    `_transition_to_status`. Returns the issue key, so the caller can
+    report which issue was changed.
+
+    Raises `ConfigError` if the config file is missing/malformed,
+    `WorkspaceError` if the active workspace can't be determined (only when
+    `issue_key` isn't given), `JiraLogTimeError` (from
+    `resolve_issue_key`) if there's no 'jira' config block or no issue
+    linked to the active workspace, and `TaskError` if no matching
+    transition exists or the Jira API call fails.
+    """
+    config: EtConfig = load_config()
+    jira_config, resolved_key = resolve_issue_key(config, issue_key=issue_key)
+
+    _transition_to_status(jira_config, resolved_key, status, display=status)
+    return resolved_key
+
+
+def get_current_status_for_current_workspace(*, issue_key: str | None = None) -> tuple[str, str]:
+    """Return (issue_key, current_status) for the issue to act on.
+
+    Used by `et jira status`'s interactive (no-argument) flow to display
+    the ticket's current status before prompting for a new one. Resolves
+    the issue the same way `set_status_for_current_workspace` does (the
+    active workspace's linked issue, or `issue_key` if given).
+
+    Raises `ConfigError`, `WorkspaceError`, or `JiraLogTimeError` under the
+    same conditions as `set_status_for_current_workspace`, and `TaskError`
+    if the Jira API call fails.
+    """
+    config: EtConfig = load_config()
+    jira_config, resolved_key = resolve_issue_key(config, issue_key=issue_key)
+
+    try:
+        status = fetch_issue_status(jira_config, resolved_key)
+    except JiraError as exc:
+        raise TaskError(str(exc)) from exc
+
+    return resolved_key, status
+
+
+def add_comment_to_current_workspace(body: str, *, issue_key: str | None = None) -> str:
+    """Add a comment to `issue_key`, or the active workspace's linked issue if omitted.
+
+    Resolves the issue to comment on the same way `set_status_for_current_workspace`
+    does (no workspace resolution at all when `issue_key` is given, e.g. via
+    `-j/--jira`, so this works even without an active linked workspace).
+    Returns the issue key the comment was added to.
+
+    Raises `ConfigError` if the config file is missing/malformed,
+    `WorkspaceError` if the active workspace can't be determined (only when
+    `issue_key` isn't given), `JiraLogTimeError` (from
+    `resolve_issue_key`) if there's no 'jira' config block or no issue
+    linked to the active workspace, and `TaskError` if the Jira API call
+    fails.
+    """
+    config: EtConfig = load_config()
+    jira_config, resolved_key = resolve_issue_key(config, issue_key=issue_key)
+
+    try:
+        create_comment(jira_config, resolved_key, body)
+    except JiraError as exc:
+        raise TaskError(str(exc)) from exc
+
+    return resolved_key
+
+
 def create_task_from_jira(
     select_issue: Callable[[list[JiraIssue]], JiraIssue | None],
     confirm_transition: Callable[[JiraIssue], bool] | None = None,
@@ -329,6 +427,7 @@ def _reset_workspace_slot(index: int) -> None:
 def complete_task_for_current_workspace(
     comment: str | None = None,
     *,
+    issue_key: str | None = None,
     on_logged: Callable[[LogTimeResult], None] = lambda result: None,
     confirm_delete: Callable[[LogTimeResult], bool] = lambda result: False,
     confirm_done: Callable[[LogTimeResult], bool] = lambda result: False,
@@ -338,7 +437,11 @@ def complete_task_for_current_workspace(
     Delegates the logging step to
     `et.jira_time.log_time_for_current_workspace` (which already resets the
     tracker on success) and, once it succeeds, calls `on_logged(log_result)`
-    so the caller can report the logged time before any prompts.
+    so the caller can report the logged time before any prompts. Logs
+    against `issue_key` if given (e.g. via `-j/--jira`), instead of the
+    issue linked to the active workspace — workspace deletion still applies
+    to the active workspace regardless, since it's not tied to which issue
+    the time was logged against.
 
     Then `confirm_delete(log_result)` is called: if it returns `True`, the
     workspace is deleted the same way `et ws delete` does — GNOME's
@@ -358,7 +461,9 @@ def complete_task_for_current_workspace(
     fails — in which case the workspace and issue are left untouched. Raises
     `TaskError` if freeing the workspace or transitioning the issue fails.
     """
-    log_result = log_time_for_current_workspace(description=comment, reset=True)
+    log_result = log_time_for_current_workspace(
+        description=comment, reset=True, issue_key=issue_key
+    )
     on_logged(log_result)
 
     workspace_freed = False
@@ -391,4 +496,7 @@ __all__ = [
     "create_task_workspace",
     "create_task_from_jira",
     "complete_task_for_current_workspace",
+    "set_status_for_current_workspace",
+    "get_current_status_for_current_workspace",
+    "add_comment_to_current_workspace",
 ]
